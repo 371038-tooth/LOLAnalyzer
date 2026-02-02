@@ -1,0 +1,27 @@
+CREATE TABLE IF NOT EXISTS users (
+    discord_id BIGINT PRIMARY KEY,
+    riot_id VARCHAR(255) NOT NULL,
+    puuid VARCHAR(255) NOT NULL,
+    reg_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    update_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS rank_history (
+    id SERIAL PRIMARY KEY,
+    discord_id BIGINT REFERENCES users(discord_id),
+    tier VARCHAR(50),
+    rank VARCHAR(10),
+    lp INTEGER,
+    fetch_date DATE NOT NULL,
+    reg_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS schedules (
+    id SERIAL PRIMARY KEY,
+    schedule_time TIME NOT NULL,
+    channel_id BIGINT NOT NULL,
+    period_days INTEGER DEFAULT 7,
+    created_by BIGINT,
+    reg_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    update_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
