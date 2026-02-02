@@ -52,6 +52,7 @@ class LOLBot(commands.Bot):
         print(f'Logged in as {self.user} (ID: {self.user.id})')
 
 def main():
+    print("--- DEPLOYMENT VERIFICATION: 2026-02-03 00:55 ---")
     raw_token = os.getenv('DISCORD_BOT_TOKEN') or os.getenv('DISCORD_TOKEN')
     
     if not raw_token:
