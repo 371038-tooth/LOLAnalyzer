@@ -60,6 +60,12 @@ def main():
     
     # Clean the token: remove whitespace and potential quotes (can happen in some environments)
     token = raw_token.strip().strip('"').strip("'")
+    
+    # Remove 'Bot ' prefix if user accidentally included it in Railway variables
+    if token.startswith('Bot '):
+        token = token[4:]
+        
+    print(f"Token loaded (length: {len(token)})")
         
     bot = LOLBot()
     bot.run(token)
