@@ -11,6 +11,10 @@ import discord
 from discord.ext import commands
 from src.database import db
 
+print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+print("!!!   DEPLOYMENT VERIFICATION: 2026-02-03 01:00      !!!")
+print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+
 # In production (Railway), environment variables are provided directly.
 # .env file is no longer used.
 
