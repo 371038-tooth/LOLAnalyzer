@@ -52,11 +52,14 @@ class LOLBot(commands.Bot):
 
 def main():
     # Attempt to get token from both common environment variable names
-    token = os.getenv('DISCORD_BOT_TOKEN') or os.getenv('DISCORD_TOKEN')
+    raw_token = os.getenv('DISCORD_BOT_TOKEN') or os.getenv('DISCORD_TOKEN')
     
-    if not token:
+    if not raw_token:
         print("Error: Neither DISCORD_BOT_TOKEN nor DISCORD_TOKEN is set.")
         return
+    
+    # Clean the token: remove whitespace and potential quotes (can happen in some environments)
+    token = raw_token.strip().strip('"').strip("'")
         
     bot = LOLBot()
     bot.run(token)
