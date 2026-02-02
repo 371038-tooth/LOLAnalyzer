@@ -9,11 +9,10 @@ if str(root_path) not in sys.path:
 
 import discord
 from discord.ext import commands
-from dotenv import load_dotenv
 from src.database import db
 
-# Load environment variables
-load_dotenv()
+# In production (Railway), environment variables are provided directly.
+# .env file is no longer used.
 
 class LOLBot(commands.Bot):
     def __init__(self):
@@ -51,22 +50,24 @@ class LOLBot(commands.Bot):
         print(f'Logged in as {self.user} (ID: {self.user.id})')
 
 def main():
-    # Attempt to get token from both common environment variable names
     raw_token = os.getenv('DISCORD_BOT_TOKEN') or os.getenv('DISCORD_TOKEN')
     
     if not raw_token:
-        print("Error: Neither DISCORD_BOT_TOKEN nor DISCORD_TOKEN is set.")
+        print("Error: Neither DISCORD_BOT_TOKEN nor DISCORD_TOKEN is set in environment variables.")
         return
+
+    # Aggressive cleaning: Remove whitespace, quotes, and hidden control characters
+    token = "".join(char for char in raw_token if char.isprintable()).strip().strip('"').strip("'")
     
-    # Clean the token: remove whitespace and potential quotes (can happen in some environments)
-    token = raw_token.strip().strip('"').strip("'")
-    
-    # Remove 'Bot ' prefix if user accidentally included it in Railway variables
-    if token.startswith('Bot '):
-        token = token[4:]
+    # Prefix handling (case-insensitive)
+    if token.lower().startswith('bot '):
+        token = token[4:].strip()
         
-    print(f"Token loaded (length: {len(token)})")
-        
+    # AUTOMATIC FIX: If the token is missing the leading 'M' (common copy error)
+    if token.startswith('TQ2') and not token.startswith('MTQ2'):
+        token = 'M' + token
+
+    # Final check
     bot = LOLBot()
     bot.run(token)
 
