@@ -14,6 +14,11 @@ from src.database import db
 # In production (Railway), environment variables are provided directly.
 # .env file is no longer used.
 
+post_load_token = os.getenv('DISCORD_BOT_TOKEN') or os.getenv('DISCORD_TOKEN')
+
+if pre_load_token != post_load_token:
+    print("Notice: Token was changed after load_dotenv(). This means a .env file might be overriding Railway variables.")
+
 class LOLBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
