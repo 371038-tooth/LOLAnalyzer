@@ -13,7 +13,15 @@ from dotenv import load_dotenv
 from src.database import db
 
 # Load environment variables
+print("Loading environment variables...")
+pre_load_token = os.getenv('DISCORD_BOT_TOKEN') or os.getenv('DISCORD_TOKEN')
+
 load_dotenv()
+
+post_load_token = os.getenv('DISCORD_BOT_TOKEN') or os.getenv('DISCORD_TOKEN')
+
+if pre_load_token != post_load_token:
+    print("Notice: Token was changed after load_dotenv(). This means a .env file might be overriding Railway variables.")
 
 class LOLBot(commands.Bot):
     def __init__(self):
@@ -62,10 +70,16 @@ def main():
     token = raw_token.strip().strip('"').strip("'")
     
     # Remove 'Bot ' prefix if user accidentally included it in Railway variables
-    if token.startswith('Bot '):
-        token = token[4:]
+    if token.lower().startswith('bot '):
+        print("Notice: 'Bot ' prefix detected and removed.")
+        token = token[4:].strip()
         
-    print(f"Token loaded (length: {len(token)})")
+    if len(token) > 0:
+        # Debug info (Safe fragments)
+        print(f"Token loaded (length: {len(token)})")
+        print(f"Token fragment for verification: {token[:3]}...{token[-3:]}")
+    else:
+        print("Error: Cleaned token is empty.")
         
     bot = LOLBot()
     bot.run(token)
