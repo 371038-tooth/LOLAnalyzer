@@ -7,16 +7,20 @@ class Database:
         self.pool = None
 
     async def connect(self):
-        dsn = os.getenv('DATABASE_URL')
+        # Support both custom URLs and Railway default URLs
+        dsn = os.getenv('DATABASE_PUBLIC_URL') or os.getenv('DATABASE_URL')
+        
         if dsn:
             self.pool = await asyncpg.create_pool(dsn)
         else:
+            # Support both 'DB_' and 'PG' prefixes (Railway uses PGxxx)
             self.pool = await asyncpg.create_pool(
-                host=os.getenv('DB_HOST', 'localhost'),
-                port=os.getenv('DB_PORT', 5432),
-                user=os.getenv('DB_USER', 'postgres'),
-                password=os.getenv('DB_PASSWORD', 'password'),
-                )
+                host=os.getenv('PGHOST') or os.getenv('DB_HOST', 'localhost'),
+                port=int(os.getenv('PGPORT') or os.getenv('DB_PORT', 5432)),
+                user=os.getenv('PGUSER') or os.getenv('DB_USER', 'postgres'),
+                password=os.getenv('PGPASSWORD') or os.getenv('DB_PASSWORD', 'password'),
+                database=os.getenv('PGDATABASE') or os.getenv('DB_NAME', 'railway')
+            )
         
         # Initialize schema
         await self.initialize()
