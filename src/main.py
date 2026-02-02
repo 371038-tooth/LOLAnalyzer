@@ -41,6 +41,22 @@ class LOLBot(commands.Bot):
     async def on_ready(self):
         print(f'Logged in as {self.user} (ID: {self.user.id})')
 
+    @commands.command()
+    async def ping(self, ctx):
+        await ctx.send(f'Pong! (Delay: {round(self.latency * 1000)}ms)')
+
+    @commands.command()
+    async def sync(self, ctx):
+        """Syncs slash commands to the current server immediately."""
+        if not ctx.author.guild_permissions.administrator:
+            await ctx.send("This command is for administrators only.")
+            return
+            
+        await ctx.send("Syncing slash commands...")
+        self.tree.copy_global_to(guild=ctx.guild)
+        synced = await self.tree.sync(guild=ctx.guild)
+        await ctx.send(f"Synced {len(synced)} commands to this server! You should see / commands now.")
+
 def main():
     # Attempt to get token from environment variables
     raw_token = os.getenv('DISCORD_BOT_TOKEN') or os.getenv('DISCORD_TOKEN')
