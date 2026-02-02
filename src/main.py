@@ -51,9 +51,11 @@ class LOLBot(commands.Bot):
         print(f'Logged in as {self.user} (ID: {self.user.id})')
 
 def main():
-    token = os.getenv('DISCORD_BOT_TOKEN')
+    # Attempt to get token from both common environment variable names
+    token = os.getenv('DISCORD_BOT_TOKEN') or os.getenv('DISCORD_TOKEN')
+    
     if not token:
-        print("Error: DISCORD_BOT_TOKEN is not set.")
+        print("Error: Neither DISCORD_BOT_TOKEN nor DISCORD_TOKEN is set.")
         return
         
     bot = LOLBot()
