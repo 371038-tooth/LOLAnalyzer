@@ -30,9 +30,23 @@ class LOLBot(commands.Bot):
         # Load extensions
         await self.load_extension('src.cogs.register')
         await self.load_extension('src.cogs.scheduler')
+        
+        # Explicitly add commands defined in this class
+        self.add_command(self.ping)
+        self.add_command(self.sync)
+        
         # Sync slash commands
         await self.tree.sync()
         print("Slash commands synced")
+
+    async def on_message(self, message):
+        if message.author.bot:
+            return
+        
+        # Logging to see if messages are reaching the bot
+        print(f"DEBUG: Message from {message.author} in {message.channel}: {message.content}")
+        
+        await self.process_commands(message)
 
     async def close(self):
         await db.close()
@@ -43,11 +57,13 @@ class LOLBot(commands.Bot):
 
     @commands.command()
     async def ping(self, ctx):
+        print(f"DEBUG: 'ping' command triggered by {ctx.author}")
         await ctx.send(f'Pong! (Delay: {round(self.latency * 1000)}ms)')
 
     @commands.command()
     async def sync(self, ctx):
         """Syncs slash commands to the current server immediately."""
+        print(f"DEBUG: 'sync' command triggered by {ctx.author}")
         if not ctx.author.guild_permissions.administrator:
             await ctx.send("This command is for administrators only.")
             return
