@@ -45,17 +45,16 @@ class OPGGClient:
     async def get_rank_info(self, summoner: Summoner):
         """
         Fetch rank info for a summoner. 
-        Returns (tier, rank, lp) for Ranked Solo.
+        Returns (tier, rank, lp, wins, losses) for Ranked Solo.
         """
         try:
-            # Refresh data
             # Refresh data only if missing
             if not getattr(summoner, 'league_stats', None):
                 await summoner.update()
             
             # Check league stats
             if not hasattr(summoner, 'league_stats'):
-                return "UNRANKED", "", 0
+                return "UNRANKED", "", 0, 0, 0
 
             for league in summoner.league_stats:
                 raw_game_type = str(getattr(league, 'game_type', '')).upper()
@@ -63,37 +62,50 @@ class OPGGClient:
                 # Check for SOLO in the game type
                 is_solo = 'SOLO' in raw_game_type
 
-                
                 if is_solo and league.tier_info:
-                    # In some versions, tier/division might be in capital or not
                     tier = getattr(league.tier_info, 'tier', 'UNRANKED')
                     division = getattr(league.tier_info, 'division', '')
+                    
+                    # Convert integer division to Roman numeral if needed
+                    rank_str = self.division_to_roman(division)
+                    
                     lp = getattr(league.tier_info, 'lp', 0)
                     wins = getattr(league.tier_info, 'wins', 0)
                     losses = getattr(league.tier_info, 'losses', 0)
                     
                     if tier:
-                        return tier, division, lp, wins, losses
-
-
-
+                        return tier, rank_str, lp, wins, losses
                 
                 # Fallback: check queue_info if it exists
-                if hasattr(league, 'queue_info') and league.queue_info:
+                if hasattr(league, 'queue_info') and league.queue_info and hasattr(league, 'tier_info'):
                     q_trans = str(getattr(league.queue_info, 'queue_translate', '')).lower()
                     if 'solo' in q_trans:
-                        tier = league.tier_info.tier
-                        division = league.tier_info.division
-                        lp = league.tier_info.lp
+                        tier = getattr(league.tier_info, 'tier', 'UNRANKED')
+                        division = getattr(league.tier_info, 'division', '')
+                        rank_str = self.division_to_roman(division)
+                        lp = getattr(league.tier_info, 'lp', 0)
                         wins = getattr(league.tier_info, 'wins', 0)
                         losses = getattr(league.tier_info, 'losses', 0)
-                        return tier, division, lp, wins, losses
+                        return tier, rank_str, lp, wins, losses
 
-                    
             return "UNRANKED", "", 0, 0, 0
         except Exception as e:
             logging.error(f"Error fetching rank info for {summoner.name}: {e}")
             return "UNRANKED", "", 0, 0, 0
+
+    def division_to_roman(self, division):
+        """Convert integer division (1-4) or string representation to Roman numeral (I-IV)."""
+        if isinstance(division, int):
+            mapping = {1: "I", 2: "II", 3: "III", 4: "IV"}
+            return mapping.get(division, str(division))
+        
+        # If it's a string, ensure it's uppercase and handle digit strings
+        div_str = str(division).upper()
+        if div_str == "1": return "I"
+        if div_str == "2": return "II"
+        if div_str == "3": return "III"
+        if div_str == "4": return "IV"
+        return div_str
 
 
 # Global instance
