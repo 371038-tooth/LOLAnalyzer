@@ -349,8 +349,20 @@ class Scheduler(commands.Cog):
         def format_date_header(d):
             return d.strftime("%m/%d")
 
+        # Helper for W/L record
+        def format_record(start, end):
+            if not start or not end:
+                return "ランク戦情報なし"
+            w = end['wins'] - start['wins']
+            l = end['losses'] - start['losses']
+            g = w + l
+            if g <= 0:
+                return "ランク戦情報なし"
+            rate = (w / g * 100) if g > 0 else 0
+            return f"{g}戦{w}勝 勝率{int(rate)}％"
+
         # Headers
-        headers = ["Nom"] + [format_date_header(d) for d in sorted_dates] + ["Diff", "W/L"]
+        headers = ["Nom"] + [format_date_header(d) for d in sorted_dates] + ["Diff", "戦績（前日）", f"戦績（{period_days}日分）"]
         
         # Determine anchor date for Diff (Latest available in sorted_dates)
         anchor_date = sorted_dates[-1] if sorted_dates else today
@@ -376,53 +388,45 @@ class Scheduler(commands.Cog):
                 row.append(cell)
             
             # Diff Calculation
-            # Compare anchor_date with its previous day
             anchor_entry = h_map.get(anchor_date)
             prev_to_anchor = anchor_date - timedelta(days=1)
             prev_entry = h_map.get(prev_to_anchor)
             
-            # Period Start (earliest in range)
             start_entry = h_map.get(sorted_dates[0]) if sorted_dates else None
-            if start_entry == anchor_entry:
-                start_entry = None
 
             diff_texts = []
             if prev_entry and anchor_entry:
                 d_text = rank_calculator.calculate_diff_text(prev_entry, anchor_entry)
                 diff_texts.append(f"前日比 {d_text}")
-            elif anchor_entry:
-                pass
-
+            
             if len(sorted_dates) >= 2 and start_entry and anchor_entry and start_entry != prev_entry:
                 day_diff = (anchor_date - sorted_dates[0]).days
                 d_text = rank_calculator.calculate_diff_text(start_entry, anchor_entry)
                 diff_texts.append(f"{day_diff}日前比 {d_text}")
-            elif not diff_texts and anchor_entry:
+            
+            if not diff_texts and anchor_entry:
                 diff_texts.append("履歴なし")
-
+            
             row.append(" | ".join(diff_texts))
 
-            # Daily W/L Calculation (for anchor_date)
-            wl_text = "-"
-            if anchor_entry and prev_entry:
-                d_wins = anchor_entry['wins'] - prev_entry['wins']
-                d_losses = anchor_entry['losses'] - prev_entry['losses']
-                if d_wins > 0 or d_losses > 0:
-                    wl_text = f"{d_wins}W {d_losses}L"
-                else:
-                    wl_text = "0戦"
-            elif anchor_entry:
-                wl_text = "new"
-
-            row.append(wl_text)
+            # 戦績（前日）
+            row.append(format_record(prev_entry, anchor_entry))
+            
+            # 戦績（〇日分）
+            row.append(format_record(start_entry, anchor_entry))
+            
             vals.append(row)
 
         # Build Table String manually for alignment
+        import unicodedata
         def get_display_width(s):
             """Calculate display width considering full-width characters."""
             width = 0
             for char in str(s):
-                if ord(char) > 0x7F: # Non-ASCII
+                eaw = unicodedata.east_asian_width(char)
+                # 'W' (Wide) and 'F' (Fullwidth) are 2 cells
+                # 'A' (Ambiguous) symbols like ± or ⇒ are usually 1 cell in Discord code blocks
+                if eaw in ('W', 'F'):
                     width += 2
                 else:
                     width += 1
