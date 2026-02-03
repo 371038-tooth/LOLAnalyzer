@@ -85,6 +85,13 @@ class Database:
                         await conn.execute("ALTER TABLE rank_history ADD COLUMN IF NOT EXISTS losses INTEGER DEFAULT 0")
                         await conn.execute("ALTER TABLE rank_history ADD COLUMN IF NOT EXISTS games INTEGER DEFAULT 0")
                         
+                        # Migration for unique constraint on rank_history
+                        try:
+                            await conn.execute("ALTER TABLE rank_history ADD CONSTRAINT rank_history_unique_entry UNIQUE (discord_id, riot_id, fetch_date)")
+                        except Exception:
+                            # Already exists or duplicates exist
+                            pass
+                        
                         print("Schema migration checked/applied (Composite Key).")
                     except Exception as e:
                         print(f"Migration warning: {e}")
@@ -145,6 +152,9 @@ class Database:
         query = """
         INSERT INTO rank_history (discord_id, riot_id, tier, rank, lp, wins, losses, games, fetch_date)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        ON CONFLICT (discord_id, riot_id, fetch_date)
+        DO UPDATE SET 
+            tier = $3, rank = $4, lp = $5, wins = $6, losses = $7, games = $8
         """
         async with self.pool.acquire() as conn:
             await conn.execute(query, discord_id, riot_id, tier, rank, lp, wins, losses, games, fetch_date)

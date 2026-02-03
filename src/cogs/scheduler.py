@@ -20,23 +20,34 @@ class Scheduler(commands.Cog):
 
     async def reload_schedules(self):
         self.scheduler.remove_all_jobs()
-        schedules = await db.get_all_schedules()
         
+        # 1. System-wide Rank Collection Job (Daily 01:00)
+        # Records data for the previous day
+        self.scheduler.add_job(
+            self.fetch_all_users_rank,
+            'cron',
+            hour=1,
+            minute=0,
+            second=0,
+            name="daily_rank_fetch"
+        )
+
+        # 2. User-defined Reporting Jobs
+        schedules = await db.get_all_schedules()
         for s in schedules:
-            # s['schedule_time'] is a datetime.time object
             sched_time = s['schedule_time']
             channel_id = s['channel_id']
             period_days = s['period_days']
             
             self.scheduler.add_job(
-                self.run_daily_task,
+                self.run_daily_report,
                 'cron',
                 hour=sched_time.hour,
                 minute=sched_time.minute,
                 second=sched_time.second,
                 args=[channel_id, period_days]
             )
-        print(f"Loaded {len(schedules)} schedules.")
+        print(f"Loaded {len(schedules)} reporting schedules and set Fetch Job at 01:00.")
 
     # Schedule Command Group
     schedule_group = app_commands.Group(name="schedule", description="定期実行スケジュールを管理します")
@@ -142,6 +153,30 @@ class Scheduler(commands.Cog):
 """
         await interaction.response.send_message(msg)
 
+    # Test Command Group
+    test_group = app_commands.Group(name="test", description="動作確認用のテストコマンドです")
+
+    @test_group.command(name="fetch", description="即座に全ユーザーのランク情報を取得します(01:00の取得と同じ動作)")
+    async def test_fetch(self, interaction: discord.Interaction, days_ago: int = 1):
+        if not (0 <= days_ago <= 7):
+            await interaction.response.send_message("days_ago は 0 から 7 の範囲で指定してください。", ephemeral=True)
+            return
+
+        await interaction.response.send_message(f"{days_ago}日前として全ユーザーのランク情報を取得中... (数分かかる場合があります)")
+        try:
+            await self.fetch_all_users_rank(days_ago)
+            await interaction.followup.send(f"{days_ago}日前としてのランク情報の取得が完了しました。")
+        except Exception as e:
+            await interaction.followup.send(f"エラーが発生しました: {e}")
+
+    @test_group.command(name="report", description="即座に指定した日数の集計結果を表示します")
+    async def test_report(self, interaction: discord.Interaction, days: int = 7):
+        await interaction.response.send_message(f"過去 {days} 日間の集計結果を出力します...")
+        try:
+            await self.run_daily_report(interaction.channel.id, days)
+        except Exception as e:
+            await interaction.followup.send(f"集計出力中にエラーが発生しました: {e}")
+
     def parse_schedule_input(self, text: str, current_channel_id: int):
         # Normalize spaces
         parts = text.strip().split()
@@ -179,9 +214,20 @@ class Scheduler(commands.Cog):
 
         return t_str, channel_id, period_days, None
 
+    async def fetch_all_users_rank(self, days_ago: int = 1):
+        print(f"Starting global rank collection (days_ago={days_ago})...")
+        # Collection at 01:00 records data for the specified day
+        target_date = date.today() - timedelta(days=days_ago)
+        users = await db.get_all_users()
+        for user in users:
+            try:
+                await self.fetch_and_save_rank(user, target_date)
+            except Exception as e:
+                print(f"Failed to fetch rank for user {user['riot_id']}: {e}")
+        print(f"Global rank collection for {target_date} completed.")
 
-    async def run_daily_task(self, channel_id: int, period_days: int):
-        print(f"Running task for channel {channel_id}")
+    async def run_daily_report(self, channel_id: int, period_days: int):
+        print(f"Running report for channel {channel_id}")
         channel = self.bot.get_channel(channel_id)
         if not channel:
             print(f"Channel {channel_id} not found.")
@@ -194,20 +240,10 @@ class Scheduler(commands.Cog):
 
         today = date.today()
         
-        # 1. Fetch and Save current rank for all users
-        for user in users:
-            try:
-                await self.fetch_and_save_rank(user)
-            except Exception as e:
-                print(f"Failed to fetch rank for user {user['riot_id']}: {e}")
-
-        # 2. Generate Report
+        # Generate Report (fetch_and_save_rank removed from here)
         try:
             report = await self.generate_report_table(users, today, period_days)
-            # Discord message limit is 2000. If report is too long, we might need to split it.
-            # Simple splitting by line
             if len(report) > 1990:
-                # Basic chunking
                 chunks = [report[i:i+1900] for i in range(0, len(report), 1900)]
                 for chunk in chunks:
                     await channel.send(f"```{chunk}```")
@@ -220,7 +256,10 @@ class Scheduler(commands.Cog):
             import traceback
             traceback.print_exc()
 
-    async def fetch_and_save_rank(self, user):
+    async def fetch_and_save_rank(self, user, target_date=None):
+        if target_date is None:
+            target_date = date.today()
+
         discord_id = user['discord_id']
         riot_id = user['riot_id'] # Expected "Name#Tag"
         if '#' not in riot_id:
@@ -243,7 +282,7 @@ class Scheduler(commands.Cog):
         # Get Rank
         tier, rank, lp, wins, losses = await opgg_client.get_rank_info(summoner)
             
-        await db.add_rank_history(discord_id, riot_id, tier, rank, lp, wins, losses, date.today())
+        await db.add_rank_history(discord_id, riot_id, tier, rank, lp, wins, losses, target_date)
 
 
     async def generate_report_table(self, users, today: date, period_days: int) -> str:
@@ -282,6 +321,9 @@ class Scheduler(commands.Cog):
         # Headers
         headers = ["Nom"] + [format_date_header(d) for d in sorted_dates] + ["Diff", "W/L"]
         
+        # Determine anchor date for Diff (Latest available in sorted_dates)
+        anchor_date = sorted_dates[-1] if sorted_dates else today
+
         vals = [] # List of rows
         
         for user in users:
@@ -303,41 +345,42 @@ class Scheduler(commands.Cog):
                 row.append(cell)
             
             # Diff Calculation
-            today_entry = h_map.get(today)
-            yesterday = today - timedelta(days=1)
-            yesterday_entry = h_map.get(yesterday)
+            # Compare anchor_date with its previous day
+            anchor_entry = h_map.get(anchor_date)
+            prev_to_anchor = anchor_date - timedelta(days=1)
+            prev_entry = h_map.get(prev_to_anchor)
             
-            # Period Start (or earliest in range)
-            start_entry = h_map.get(sorted_dates[0])
-            if start_entry == today_entry:
+            # Period Start (earliest in range)
+            start_entry = h_map.get(sorted_dates[0]) if sorted_dates else None
+            if start_entry == anchor_entry:
                 start_entry = None
 
             diff_texts = []
-            if yesterday_entry and today_entry:
-                d_text = rank_calculator.calculate_diff_text(yesterday_entry, today_entry)
+            if prev_entry and anchor_entry:
+                d_text = rank_calculator.calculate_diff_text(prev_entry, anchor_entry)
                 diff_texts.append(f"前日比 {d_text}")
-            elif today_entry:
+            elif anchor_entry:
                 pass
 
-            if len(sorted_dates) >= 2 and start_entry and today_entry and start_entry != yesterday_entry:
-                day_diff = (today - sorted_dates[0]).days
-                d_text = rank_calculator.calculate_diff_text(start_entry, today_entry)
+            if len(sorted_dates) >= 2 and start_entry and anchor_entry and start_entry != prev_entry:
+                day_diff = (anchor_date - sorted_dates[0]).days
+                d_text = rank_calculator.calculate_diff_text(start_entry, anchor_entry)
                 diff_texts.append(f"{day_diff}日前比 {d_text}")
-            elif not diff_texts and today_entry:
+            elif not diff_texts and anchor_entry:
                 diff_texts.append("履歴なし")
 
             row.append(" | ".join(diff_texts))
 
-            # Daily W/L Calculation
+            # Daily W/L Calculation (for anchor_date)
             wl_text = "-"
-            if today_entry and yesterday_entry:
-                d_wins = today_entry['wins'] - yesterday_entry['wins']
-                d_losses = today_entry['losses'] - yesterday_entry['losses']
+            if anchor_entry and prev_entry:
+                d_wins = anchor_entry['wins'] - prev_entry['wins']
+                d_losses = anchor_entry['losses'] - prev_entry['losses']
                 if d_wins > 0 or d_losses > 0:
                     wl_text = f"{d_wins}W {d_losses}L"
                 else:
                     wl_text = "0戦"
-            elif today_entry:
+            elif anchor_entry:
                 wl_text = "new"
 
             row.append(wl_text)
