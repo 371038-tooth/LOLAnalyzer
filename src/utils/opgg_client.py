@@ -68,8 +68,9 @@ class OPGGClient:
                 logging.error(f"v3 search error for {query}: {e}")
 
         # v2 or Fallback logic
+        region_str = region.value.lower() if hasattr(region, 'value') else str(region).lower()
         url_template = self._search_api_url.format(
-            region=region.value,
+            region=region_str,
             summoner_name=name,
             tagline=tag
         )
@@ -91,7 +92,7 @@ class OPGGClient:
             async with aiohttp.ClientSession() as session:
                 # We need to format the URL manually because self._search_api_url has placeholders
                 url = self._search_api_url.format(
-                    region=region.value,
+                    region=region_str,
                     summoner_name=name,
                     tagline=tag
                 )
@@ -119,43 +120,55 @@ class OPGGClient:
             try:
                 # In v3, maybe summoner.profile() or opgg.profile(summoner)
                 # But typically summoner objects have lazy loading or explicit update
-                # Let's try the summary API directly as fallback if update() is sync
                 pass
             except Exception:
                 pass
 
         # Fallback / v2 manual logic
         try:
+            # Note: Ensure region is lowercase if needed
+            region_str = "jp" # Default to jp for now as per previous logic
             url = self._summary_api_url.format(
-                region=Region.JP,
+                region=region_str,
                 summoner_id=summoner.summoner_id
             )
             params = self._get_params(url)
             
+            profile_data = None
             if Utils and hasattr(Utils, '_fetch_profile'):
                 profile_data = await Utils._fetch_profile(summoner.summoner_id, params)
-            else:
-                # Direct aiohttp fetch if Utils is missing (v3 case where we don't have OPGG methods yet)
+            
+            if not profile_data:
+                # Direct aiohttp fetch fallback
                 async with aiohttp.ClientSession() as session:
                     async with session.get(url, headers=self._headers) as resp:
                         if resp.status == 200:
                             data = await resp.json()
                             profile_data = data.get('data', {})
-                        else:
-                            profile_data = None
 
             if not profile_data:
                 return "UNRANKED", "", 0, 0, 0
                 
             stats = profile_data.get('league_stats', [])
             for stat in stats:
-                if stat.get('queue_info', {}).get('game_type') == 'SOLORANKED':
-                    tier_info = stat.get('tier_info', {})
-                    tier = tier_info.get('tier', 'UNRANKED')
-                    division = tier_info.get('division', '')
+                queue_info = stat.get('queue_info', {})
+                game_type = queue_info.get('game_type', '').upper()
+                
+                # Check for various Solo Queue identifiers
+                if game_type in ['SOLORANKED', 'RANKED_SOLO_5X5', 'SOLO']:
+                    # Try to find tier_info
+                    tier_info = stat.get('tier_info')
+                    if not tier_info:
+                        # Maybe it's flat in stat?
+                        tier_info = stat
+                    
+                    tier = tier_info.get('tier', 'UNRANKED').upper()
+                    # OPGG sometimes uses 'division' (int 1-4) or 'rank' (int 1-4 or Roman)
+                    division = tier_info.get('division') or tier_info.get('rank') or ""
                     lp = tier_info.get('lp', 0)
                     wins = stat.get('win', 0)
                     losses = stat.get('lose', 0)
+                    
                     return tier, self.division_to_roman(division), lp, wins, losses
             
             return "UNRANKED", "", 0, 0, 0
@@ -168,10 +181,15 @@ class OPGGClient:
         return w, l
 
     def division_to_roman(self, division):
+        if not division:
+            return ""
         if isinstance(division, int):
             mapping = {1: "I", 2: "II", 3: "III", 4: "IV"}
             return mapping.get(division, str(division))
+        
         div_str = str(division).upper()
+        if div_str in ["I", "II", "III", "IV"]:
+            return div_str
         if div_str == "1": return "I"
         if div_str == "2": return "II"
         if div_str == "3": return "III"
@@ -179,7 +197,8 @@ class OPGGClient:
         return div_str
 
     async def get_tier_history(self, summoner_id: str, region: Region):
-        url = f"https://lol-web-api.op.gg/api/v1.0/internal/bypass/summoners/{region.value}/{summoner_id}/tier-history"
+        region_str = region.value.lower() if hasattr(region, 'value') else str(region).lower()
+        url = f"https://lol-web-api.op.gg/api/v1.0/internal/bypass/summoners/{region_str}/{summoner_id}/tier-history"
         headers = self._headers
         try:
             async with aiohttp.ClientSession() as session:
@@ -191,16 +210,28 @@ class OPGGClient:
                     history_list = data.get('data', [])
                     results = []
                     for entry in history_list:
-                        tier_info = entry.get('tier_info', {})
                         updated_at_str = entry.get('created_at')
-                        if not tier_info or not updated_at_str: continue
+                        if not updated_at_str: continue
+                        
+                        # Try to find tier_info
+                        tier_info = entry.get('tier_info')
+                        if not tier_info:
+                            # Maybe it's flat in entry?
+                            tier_info = entry
+                        
                         try:
                             updated_at = datetime.fromisoformat(updated_at_str.replace('Z', '+00:00'))
                         except Exception: continue
+                        
+                        tier = tier_info.get('tier', 'UNRANKED').upper()
+                        # Some versions use 'division', others 'rank'
+                        division = tier_info.get('division') or tier_info.get('rank') or ""
+                        lp = tier_info.get('lp', 0)
+                        
                         results.append({
-                            'tier': tier_info.get('tier', 'UNRANKED'),
-                            'rank': self.division_to_roman(tier_info.get('division', '')),
-                            'lp': tier_info.get('lp', 0),
+                            'tier': tier,
+                            'rank': self.division_to_roman(division),
+                            'lp': lp,
                             'wins': 0,
                             'losses': 0,
                             'updated_at': updated_at
