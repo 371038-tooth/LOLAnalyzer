@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS rank_history (
     games INTEGER DEFAULT 0,
     fetch_date DATE NOT NULL,
     reg_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (discord_id, riot_id) REFERENCES users(discord_id, riot_id),
+    FOREIGN KEY (discord_id, riot_id) REFERENCES users(discord_id, riot_id) ON DELETE CASCADE,
     UNIQUE (discord_id, riot_id, fetch_date)
 );
 

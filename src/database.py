@@ -74,10 +74,12 @@ class Database:
                         # Add composite FK to rank_history
                         # First drop old FK if exists
                         await conn.execute("ALTER TABLE rank_history DROP CONSTRAINT IF EXISTS rank_history_discord_id_fkey")
+                        await conn.execute("ALTER TABLE rank_history DROP CONSTRAINT IF EXISTS rank_history_user_fkey")
                         await conn.execute("""
                             ALTER TABLE rank_history 
                             ADD CONSTRAINT rank_history_user_fkey 
                             FOREIGN KEY (discord_id, riot_id) REFERENCES users(discord_id, riot_id)
+                            ON DELETE CASCADE
                         """)
                         
                         # Migration for wins/losses/games if they don't exist

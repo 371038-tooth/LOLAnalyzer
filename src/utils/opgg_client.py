@@ -39,16 +39,24 @@ class OPGGClient:
     async def get_summoner(self, name: str, tag: str, region: Region = Region.JP):
         """Fetch summoner info by name and tag (Async)."""
         query = f"{name}#{tag}"
+        logging.info(f"Searching for summoner: {query} (Region: {region}, IS_V2: {IS_V2})")
         
         # v3 logic (if instance exists and is not v2)
         if not IS_V2 and self.opgg_instance:
             try:
-                # search() might be sync or async depending on the exact v3 sub-version
-                # In most 3.x, search() is async.
+                # Try Region object
                 res = await self.opgg_instance.search(query, region=region)
+                if not res:
+                    # Try region string
+                    logging.info(f"v3 search returned nothing for {query} with {region}, trying with string '{region.value}'")
+                    res = await self.opgg_instance.search(query, region=region.value)
+                
                 if res and len(res) > 0:
+                    logging.info(f"v3 search found {len(res)} results for {query}")
                     # In v3 SearchResult has .summoner
                     return res[0].summoner if hasattr(res[0], 'summoner') else res[0]
+                else:
+                    logging.info(f"v3 search returned no results for {query}")
             except Exception as e:
                 logging.error(f"v3 search error for {query}: {e}")
 
@@ -59,16 +67,19 @@ class OPGGClient:
             tagline=tag
         )
         params = self._get_params(url_template)
+        logging.info(f"Using fallback search for {query} (URL: {url_template})")
         
         try:
             if Utils and hasattr(Utils, '_single_region_search'):
                 # We need the original template for format_map inside Utils
                 params["base_api_url"] = self._search_api_url
                 results = await Utils._single_region_search(query, region, params)
-                if not results:
-                    return None
-                summoner_data = results[0]["summoner"]
-                return Summoner(summoner_data)
+                if results:
+                    logging.info(f"Fallback search found {len(results)} results for {query}")
+                    summoner_data = results[0]["summoner"]
+                    return Summoner(summoner_data)
+                else:
+                    logging.info(f"Fallback search returned no results for {query}")
         except Exception as e:
             logging.error(f"Fallback search error for {query}: {e}")
             
