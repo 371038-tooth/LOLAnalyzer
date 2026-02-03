@@ -418,30 +418,39 @@ class Scheduler(commands.Cog):
             vals.append(row)
 
         # Build Table String manually for alignment
-        # Calculate max width for each column
-        col_widths = [len(h) for h in headers]
+        def get_display_width(s):
+            """Calculate display width considering full-width characters."""
+            width = 0
+            for char in str(s):
+                if ord(char) > 0x7F: # Non-ASCII
+                    width += 2
+                else:
+                    width += 1
+            return width
+
+        def pad_string(s, width):
+            """Pad string with spaces to reach visual width."""
+            s_str = str(s)
+            current_w = get_display_width(s_str)
+            padding = width - current_w
+            return s_str + (" " * max(0, padding))
+
+        # Calculate max visual width for each column
+        col_widths = [get_display_width(h) for h in headers]
         for row in vals:
             for i, cell in enumerate(row):
-                # Handle extended ascii chars width? (Japanese chars are wide)
-                # Simple len() is inaccurate for JP text alignment.
-                # But for Discord code block, it's monospaced but JP chars are double width.
-                # `wcwidth` lib is good but external.
-                # For now use loose alignment.
-                col_widths[i] = max(col_widths[i], len(str(cell))) # Python len counts chars, not display width
+                col_widths[i] = max(col_widths[i], get_display_width(cell))
         
         # Formatting rows
-        # Since I can't guarantee font width in Discord mobile vs desktop,
-        # I'll stick to simple pipe separation.
-        
         # Header
-        header_line = "| " + " | ".join(headers) + " |"
+        header_line = "| " + " | ".join([pad_string(h, col_widths[i]) for i, h in enumerate(headers)]) + " |"
         
-        # Separator (optional)
-        # sep_line = "| " + " | ".join(["-" * w for w in col_widths]) + " |"
+        # Separator Line
+        sep_line = "|-" + "-|-".join(["-" * w for w in col_widths]) + "-|"
         
-        lines = [header_line]
+        lines = [header_line, sep_line]
         for row in vals:
-            lines.append("| " + " | ".join([str(c) for c in row]) + " |")
+            lines.append("| " + " | ".join([pad_string(c, col_widths[i]) for i, c in enumerate(row)]) + " |")
             
         return "\n".join(lines)
 
