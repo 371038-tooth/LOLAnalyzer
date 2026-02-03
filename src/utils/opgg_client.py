@@ -77,16 +77,36 @@ class OPGGClient:
         logging.info(f"Using fallback search for {query} (URL: {url_template})")
         
         try:
+            # 1. Try Utils if available
             if Utils and hasattr(Utils, '_single_region_search'):
-                # We need the original template for format_map inside Utils
                 params["base_api_url"] = self._search_api_url
                 results = await Utils._single_region_search(query, region, params)
                 if results:
-                    logging.info(f"Fallback search found {len(results)} results for {query}")
+                    logging.info(f"Fallback search (Utils) found {len(results)} results")
                     summoner_data = results[0]["summoner"]
                     return Summoner(summoner_data)
-                else:
-                    logging.info(f"Fallback search returned no results for {query}")
+
+            # 2. Try raw aiohttp request (Last resort)
+            logging.info(f"Trying raw aiohttp search for {query}")
+            async with aiohttp.ClientSession() as session:
+                # We need to format the URL manually because self._search_api_url has placeholders
+                url = self._search_api_url.format(
+                    region=region.value,
+                    summoner_name=name,
+                    tagline=tag
+                )
+                headers = self._headers
+                async with session.get(url, headers=headers) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        results = data.get('data', [])
+                        if results:
+                            logging.info(f"Raw aiohttp search found {len(results)} results")
+                            summoner_data = results[0]
+                            return Summoner(summoner_data)
+                    else:
+                        logging.error(f"Raw aiohttp search failed with status {response.status}")
+
         except Exception as e:
             logging.error(f"Fallback search error for {query}: {e}")
             
