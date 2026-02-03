@@ -362,7 +362,7 @@ class Scheduler(commands.Cog):
             return f"{g}戦{w}勝 勝率{int(rate)}％"
 
         # Headers
-        headers = ["Nom"] + [format_date_header(d) for d in sorted_dates] + ["Diff", "戦績（前日）", f"戦績（{period_days}日分）"]
+        headers = ["Nom"] + [format_date_header(d) for d in sorted_dates] + ["前日比", f"{period_days}日比", "戦績（前日）", f"戦績（{period_days}日分）"]
         
         # Determine anchor date for Diff (Latest available in sorted_dates)
         anchor_date = sorted_dates[-1] if sorted_dates else today
@@ -387,27 +387,29 @@ class Scheduler(commands.Cog):
                     cell = "-"
                 row.append(cell)
             
-            # Diff Calculation
+            # 1. 前日比 (Daily Diff)
             anchor_entry = h_map.get(anchor_date)
             prev_to_anchor = anchor_date - timedelta(days=1)
             prev_entry = h_map.get(prev_to_anchor)
             
-            start_entry = h_map.get(sorted_dates[0]) if sorted_dates else None
-
-            diff_texts = []
+            daily_diff_str = "-"
             if prev_entry and anchor_entry:
-                d_text = rank_calculator.calculate_diff_text(prev_entry, anchor_entry)
-                diff_texts.append(f"前日比 {d_text}")
-            
-            if len(sorted_dates) >= 2 and start_entry and anchor_entry and start_entry != prev_entry:
-                day_diff = (anchor_date - sorted_dates[0]).days
-                d_text = rank_calculator.calculate_diff_text(start_entry, anchor_entry)
-                diff_texts.append(f"{day_diff}日前比 {d_text}")
-            
-            if not diff_texts and anchor_entry:
-                diff_texts.append("履歴なし")
-            
-            row.append(" | ".join(diff_texts))
+                daily_diff_str = rank_calculator.calculate_diff_text(prev_entry, anchor_entry, include_prefix=False)
+            elif anchor_entry:
+                daily_diff_str = "履歴なし"
+            row.append(daily_diff_str)
+
+            # 2. 〇日比 (Period Diff)
+            start_entry = h_map.get(sorted_dates[0]) if sorted_dates else None
+            period_diff_str = "-"
+            if start_entry and anchor_entry:
+                if start_entry == anchor_entry:
+                    period_diff_str = "期間中変化なし"
+                else:
+                    period_diff_str = rank_calculator.calculate_diff_text(start_entry, anchor_entry, include_prefix=False)
+            elif anchor_entry:
+                period_diff_str = "履歴なし"
+            row.append(period_diff_str)
 
             # 戦績（前日）
             row.append(format_record(prev_entry, anchor_entry))
@@ -420,13 +422,13 @@ class Scheduler(commands.Cog):
         # Build Table String manually for alignment
         import unicodedata
         def get_display_width(s):
-            """Calculate display width considering full-width characters."""
+            """Calculate display width considering full-width and ambiguous characters."""
             width = 0
             for char in str(s):
                 eaw = unicodedata.east_asian_width(char)
-                # 'W' (Wide) and 'F' (Fullwidth) are 2 cells
-                # 'A' (Ambiguous) symbols like ± or ⇒ are usually 1 cell in Discord code blocks
-                if eaw in ('W', 'F'):
+                # 'W' (Wide), 'F' (Fullwidth), and 'A' (Ambiguous like ±, ⇒)
+                # Discord monospaced font often renders Ambiguous as double-width.
+                if eaw in ('W', 'F', 'A'):
                     width += 2
                 else:
                     width += 1

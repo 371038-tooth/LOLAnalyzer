@@ -68,7 +68,7 @@ def format_rank_diff(diff: int) -> str:
     else:
         return "±0LP"
 
-def calculate_diff_text(old_data: dict, new_data: dict) -> str:
+def calculate_diff_text(old_data: dict, new_data: dict, include_prefix: bool = True) -> str:
     """
     Calculate textual representation of rank change.
     e.g. "Tier DII⇒DI LP: +99LP" or "Tier:変化なし LP:±0LP"
@@ -93,9 +93,17 @@ def calculate_diff_text(old_data: dict, new_data: dict) -> str:
     lp_diff_str = format_rank_diff(diff)
     
     if old_str == new_str:
-        return f"Tier:変化なし LP:{lp_diff_str}"
+        content = f"Tier:変化なし LP:{lp_diff_str}"
     else:
-        return f"Tier {old_str}⇒{new_str} LP: {lp_diff_str}"
+        content = f"Tier {old_str}⇒{new_str} LP: {lp_diff_str}"
+
+    if not include_prefix:
+        return content
+
+    # Legacy: This part was actually prefixed in the cog, but the function itself didn't have one?
+    # Wait, the current implementation in cog adds the prefix. 
+    # Let me re-check the cog logic before editing.
+    return content
 
 def shorten_tier(tier: str) -> str:
     """Shorten Tier name for display (e.g. DIAMOND -> D)."""
