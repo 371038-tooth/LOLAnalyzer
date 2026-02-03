@@ -113,11 +113,30 @@ class Database:
             return await conn.fetch(query, discord_id) # Returns potentially multiple
 
     async def register_schedule(self, schedule_time, channel_id: int, created_by: int, period_days: int):
-        # ... (unchanged)
-        pass
+        # schedule_time might be string 'HH:MM' or 'HH:MM:SS'
+        if isinstance(schedule_time, str):
+            # Try to parse HH:MM or HH:MM:SS
+            try:
+                if len(schedule_time.split(':')) == 2:
+                    dt = datetime.strptime(schedule_time, "%H:%M")
+                else:
+                    dt = datetime.strptime(schedule_time, "%H:%M:%S")
+                schedule_time = dt.time()
+            except ValueError as e:
+                raise ValueError(f"Invalid time format: {schedule_time}") from e
 
-    # (Skipping middle methods for clarity in replacement chunk but I'll make sure to match)
-    # Wait, I should provide a cleaner replacement.
+        query = """
+        INSERT INTO schedules (schedule_time, channel_id, created_by, period_days, update_date)
+        VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+        RETURNING id
+        """
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval(query, schedule_time, channel_id, created_by, period_days)
+
+    async def get_all_schedules(self):
+        query = "SELECT * FROM schedules"
+        async with self.pool.acquire() as conn:
+            return await conn.fetch(query)
 
     async def add_rank_history(self, discord_id: int, riot_id: str, tier: str, rank: str, lp: int, wins: int, losses: int, fetch_date: date):
         # Calculate games
