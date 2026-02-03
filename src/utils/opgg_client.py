@@ -69,11 +69,11 @@ class OPGGClient:
                     tier = getattr(league.tier_info, 'tier', 'UNRANKED')
                     division = getattr(league.tier_info, 'division', '')
                     lp = getattr(league.tier_info, 'lp', 0)
-                    
-                    lp = getattr(league.tier_info, 'lp', 0)
+                    wins = getattr(league.tier_info, 'wins', 0)
+                    losses = getattr(league.tier_info, 'losses', 0)
                     
                     if tier:
-                        return tier, division, lp
+                        return tier, division, lp, wins, losses
 
 
 
@@ -85,14 +85,15 @@ class OPGGClient:
                         tier = league.tier_info.tier
                         division = league.tier_info.division
                         lp = league.tier_info.lp
-                        return tier, division, lp
-
+                        wins = getattr(league.tier_info, 'wins', 0)
+                        losses = getattr(league.tier_info, 'losses', 0)
+                        return tier, division, lp, wins, losses
 
                     
-            return "UNRANKED", "", 0
+            return "UNRANKED", "", 0, 0, 0
         except Exception as e:
             logging.error(f"Error fetching rank info for {summoner.name}: {e}")
-            return "UNRANKED", "", 0
+            return "UNRANKED", "", 0, 0, 0
 
 
 # Global instance

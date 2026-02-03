@@ -133,72 +133,7 @@ class Register(commands.Cog):
             return
 
 
-    @app_commands.command(name="register_schedule", description="定期実行スケジュールを登録します")
-    async def register_schedule(self, interaction: discord.Interaction):
-        await interaction.response.send_message("定期実行する時間を入力してください (例: 21:00)")
 
-        def check(m):
-            return m.author.id == interaction.user.id and m.channel.id == interaction.channel.id
-
-        try:
-            time_msg = await self.bot.wait_for('message', check=check, timeout=60.0)
-        except asyncio.TimeoutError:
-             await interaction.followup.send("タイムアウトしました。")
-             return
-
-        time_str = time_msg.content.strip()
-        # Basic validation for time format could be added here
-        
-        await interaction.followup.send("通知先のチャンネルIDを入力してください (現在のチャンネルの場合は 'here' と入力)")
-
-        try:
-            channel_msg = await self.bot.wait_for('message', check=check, timeout=60.0)
-        except asyncio.TimeoutError:
-            await interaction.followup.send("タイムアウトしました。")
-            return
-
-        channel_input = channel_msg.content.strip()
-        channel_id = None
-        if channel_input.lower() == 'here':
-            channel_id = interaction.channel.id
-        elif channel_input.isdigit():
-            channel_id = int(channel_input)
-        else:
-             await interaction.followup.send("無効なチャンネルIDです。")
-             return
-
-        await interaction.followup.send("集計する期間（日数）を入力してください (例: 7)")
-
-        try:
-            period_msg = await self.bot.wait_for('message', check=check, timeout=60.0)
-        except asyncio.TimeoutError:
-            await interaction.followup.send("タイムアウトしました。")
-            return
-            
-        period_input = period_msg.content.strip()
-        if not period_input.isdigit():
-            await interaction.followup.send("日数は数値で入力してください。")
-            return
-        
-        period_days = int(period_input)
-
-        # Save to DB
-        try:
-            await db.register_schedule(time_str, channel_id, interaction.user.id, period_days)
-            await interaction.followup.send(f"スケジュール登録完了: {time_str} にチャンネル {channel_id} へ通知 ({period_days}日分)")
-            
-            # Trigger scheduler reload (This would typically require accessing the scheduler cog)
-            # For simplicity, we can tell the user to restart or implement a reload method.
-            # Ideally, get the cog and call a reload method.
-            scheduler_cog = self.bot.get_cog('Scheduler')
-            if scheduler_cog:
-                await scheduler_cog.reload_schedules()
-                await interaction.followup.send("スケジューラーを更新しました。")
-            else:
-                await interaction.followup.send("スケジューラーCogが見つかりません。Botを再起動してください。")
-
-        except Exception as e:
-            await interaction.followup.send(f"スケジュールの保存に失敗しました。\nError: {e}")
 
 async def setup(bot):
     await bot.add_cog(Register(bot))

@@ -43,6 +43,17 @@ class Database:
                 schema_sql = f.read()
                 async with self.pool.acquire() as conn:
                     await conn.execute(schema_sql)
+                    
+                    # Migration for wins/losses/games if they don't exist
+                    # This check is basic but effective for adding columns if missing
+                    try:
+                        await conn.execute("ALTER TABLE rank_history ADD COLUMN IF NOT EXISTS wins INTEGER DEFAULT 0")
+                        await conn.execute("ALTER TABLE rank_history ADD COLUMN IF NOT EXISTS losses INTEGER DEFAULT 0")
+                        await conn.execute("ALTER TABLE rank_history ADD COLUMN IF NOT EXISTS games INTEGER DEFAULT 0")
+                        print("Schema migration checked/applied.")
+                    except Exception as e:
+                        print(f"Migration warning: {e}")
+
             print("Database schema initialized.")
         else:
             print(f"Warning: schema.sql not found at {schema_path}")
@@ -83,16 +94,16 @@ class Database:
         async with self.pool.acquire() as conn:
             return await conn.fetch(query)
 
-    async def add_rank_history(self, discord_id: int, tier: str, rank: str, lp: int, fetch_date: date):
-        # Check if entry already exists for this date to avoid duplicates if run multiple times?
-        # Requirement says "1/31に1/30のランクとLPの情報を取得" etc.
-        # We should probably allow one entry per fetch_date per user.
+    async def add_rank_history(self, discord_id: int, tier: str, rank: str, lp: int, wins: int, losses: int, fetch_date: date):
+        # Calculate games
+        games = wins + losses
+        
         query = """
-        INSERT INTO rank_history (discord_id, tier, rank, lp, fetch_date)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO rank_history (discord_id, tier, rank, lp, wins, losses, games, fetch_date)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         """
         async with self.pool.acquire() as conn:
-            await conn.execute(query, discord_id, tier, rank, lp, fetch_date)
+            await conn.execute(query, discord_id, tier, rank, lp, wins, losses, games, fetch_date)
 
     async def get_rank_history(self, discord_id: int, start_date: date, end_date: date):
         query = """
@@ -107,5 +118,23 @@ class Database:
         query = "SELECT * FROM users"
         async with self.pool.acquire() as conn:
             return await conn.fetch(query)
+    async def delete_schedule(self, schedule_id: int):
+        query = "DELETE FROM schedules WHERE id = $1"
+        async with self.pool.acquire() as conn:
+            await conn.execute(query, schedule_id)
+
+    async def update_schedule(self, schedule_id: int, schedule_time: str, channel_id: int, period_days: int):
+        query = """
+        UPDATE schedules 
+        SET schedule_time = $2::TIME, channel_id = $3, period_days = $4, update_date = CURRENT_TIMESTAMP
+        WHERE id = $1
+        """
+        async with self.pool.acquire() as conn:
+            await conn.execute(query, schedule_id, schedule_time, channel_id, period_days)
+
+    async def get_schedule_by_id(self, schedule_id: int):
+        query = "SELECT * FROM schedules WHERE id = $1"
+        async with self.pool.acquire() as conn:
+            return await conn.fetchrow(query, schedule_id)
 
 db = Database()

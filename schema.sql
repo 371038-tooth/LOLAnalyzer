@@ -12,6 +12,9 @@ CREATE TABLE IF NOT EXISTS rank_history (
     tier VARCHAR(50),
     rank VARCHAR(10),
     lp INTEGER,
+    wins INTEGER DEFAULT 0,
+    losses INTEGER DEFAULT 0,
+    games INTEGER DEFAULT 0,
     fetch_date DATE NOT NULL,
     reg_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

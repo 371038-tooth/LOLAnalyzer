@@ -1,4 +1,5 @@
 import discord
+from discord import app_commands
 from discord.ext import commands
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from src.database import db
@@ -6,6 +7,7 @@ from src.utils import rank_calculator
 from src.utils.opgg_client import opgg_client
 from datetime import datetime, date, timedelta
 import asyncio
+import re
 
 class Scheduler(commands.Cog):
     def __init__(self, bot):
@@ -35,6 +37,148 @@ class Scheduler(commands.Cog):
                 args=[channel_id, period_days]
             )
         print(f"Loaded {len(schedules)} schedules.")
+
+    # Schedule Command Group
+    schedule_group = app_commands.Group(name="schedule", description="定期実行スケジュールを管理します")
+
+    @schedule_group.command(name="show", description="現在登録されているスケジュールの一覧を表示します")
+    async def schedule_show(self, interaction: discord.Interaction):
+        schedules = await db.get_all_schedules()
+        if not schedules:
+            await interaction.response.send_message("登録されているスケジュールはありません。")
+            return
+
+        msg = "**登録スケジュール一覧**\n"
+        for s in schedules:
+            # s['schedule_time'] might be time object
+            t = s['schedule_time']
+            t_str = t.strftime("%H:%M") if hasattr(t, 'strftime') else str(t)
+            msg += f"ID: {s['id']} | 時間: {t_str} | Ch: {s['channel_id']} | 期間: {s['period_days']}日\n"
+        
+        await interaction.response.send_message(msg)
+
+    @schedule_group.command(name="add", description="スケジュールを登録します")
+    async def schedule_add(self, interaction: discord.Interaction):
+        await interaction.response.send_message("登録するスケジュールを入力してください。\n形式: `時間(HH:MM) チャンネル(ID or here) 期間(日数)`\n例: `21:00 here 7`")
+
+        def check(m):
+            return m.author.id == interaction.user.id and m.channel.id == interaction.channel.id
+
+        try:
+            msg = await self.bot.wait_for('message', check=check, timeout=60.0)
+        except asyncio.TimeoutError:
+            await interaction.followup.send("タイムアウトしました。")
+            return
+
+        time_str, channel_id, period_days, error = self.parse_schedule_input(msg.content, interaction.channel.id)
+        if error:
+            await interaction.followup.send(error)
+            return
+
+        try:
+            await db.register_schedule(time_str, channel_id, interaction.user.id, period_days)
+            await self.reload_schedules()
+            await interaction.followup.send(f"スケジュール登録完了: {time_str} にチャンネル {channel_id} へ通知 ({period_days}日分)")
+        except Exception as e:
+            await interaction.followup.send(f"エラーが発生しました: {e}")
+
+    @schedule_group.command(name="del", description="スケジュールIDを指定して削除します")
+    async def schedule_del(self, interaction: discord.Interaction, schedule_id: int):
+        s = await db.get_schedule_by_id(schedule_id)
+        if not s:
+            await interaction.response.send_message(f"スケジュールID {schedule_id} は存在しません。", ephemeral=True)
+            return
+
+        try:
+            await db.delete_schedule(schedule_id)
+            await self.reload_schedules()
+            await interaction.response.send_message(f"スケジュールID {schedule_id} を削除しました。")
+        except Exception as e:
+            await interaction.response.send_message(f"エラーが発生しました: {e}", ephemeral=True)
+
+    @schedule_group.command(name="edit", description="スケジュールIDを指定してスケジュールを変更します")
+    async def schedule_edit(self, interaction: discord.Interaction, schedule_id: int):
+        s = await db.get_schedule_by_id(schedule_id)
+        if not s:
+            await interaction.response.send_message(f"スケジュールID {schedule_id} は存在しません。", ephemeral=True)
+            return
+
+        current_time = s['schedule_time'].strftime("%H:%M") if hasattr(s['schedule_time'], 'strftime') else str(s['schedule_time'])
+        await interaction.response.send_message(f"変更内容を入力してください (ID: {schedule_id})\n現在の設定: `{current_time} {s['channel_id']} {s['period_days']}`\n形式: `時間 チャンネル 期間` (例: `22:00 here 7`)")
+
+        def check(m):
+            return m.author.id == interaction.user.id and m.channel.id == interaction.channel.id
+
+        try:
+            msg = await self.bot.wait_for('message', check=check, timeout=60.0)
+        except asyncio.TimeoutError:
+            await interaction.followup.send("タイムアウトしました。")
+            return
+
+        time_str, channel_id, period_days, error = self.parse_schedule_input(msg.content, interaction.channel.id)
+        if error:
+            await interaction.followup.send(error)
+            return
+
+        try:
+            await db.update_schedule(schedule_id, time_str, channel_id, period_days)
+            await self.reload_schedules()
+            await interaction.followup.send(f"スケジュールID {schedule_id} を更新しました。")
+        except Exception as e:
+            await interaction.followup.send(f"エラーが発生しました: {e}")
+
+    @schedule_group.command(name="help", description="scheduleコマンドの使い方を表示します")
+    async def schedule_help(self, interaction: discord.Interaction):
+        msg = """
+**schedule コマンドの使い方**
+`/schedule show` : 現在登録されているスケジュールの一覧を表示します。
+`/schedule add` : 新しいスケジュールを登録します。対話形式で `時間 チャンネル 期間` を入力します。
+`/schedule del schedule_id` : 指定したIDのスケジュールを削除します。
+`/schedule edit schedule_id` : 指定したIDのスケジュールを変更します。
+
+**入力形式の例**
+`21:00 here 7` : 毎日21時に、このチャンネルに、過去7日間のレポートを表示
+`09:30 1234567890 3` : 毎日9:30に、チャンネルID 1234567890 に、過去3日間のレポートを表示
+"""
+        await interaction.response.send_message(msg)
+
+    def parse_schedule_input(self, text: str, current_channel_id: int):
+        # Normalize spaces
+        parts = text.strip().split()
+        if len(parts) < 3:
+            return None, None, None, "入力形式が正しくありません。`時間 チャンネル 期間` の順で入力してください。(例: 21:00 here 7)"
+
+        # Simple heuristic parsing (Expect Time Channel Period order, but try to be flexible if distinct)
+        # Time usually has ':'
+        # Channel is 'here' or long digits
+        # Period is small digits
+
+        # Let's try strict order first as per example instructions, but example was `21:00 here 7`
+        
+        t_str = parts[0]
+        c_str = parts[1]
+        p_str = parts[2]
+
+        # Validate Time
+        if ':' not in t_str:
+             return None, None, None, "時間の形式が正しくありません (例: 21:00)"
+        
+        # Validate Channel
+        channel_id = None
+        if c_str.lower() == 'here':
+            channel_id = current_channel_id
+        elif c_str.isdigit():
+            channel_id = int(c_str)
+        else:
+             return None, None, None, "チャンネル指定が正しくありません ('here' または ID)"
+
+        # Validate Period
+        if not p_str.isdigit():
+             return None, None, None, "期間（日数）は数値で入力してください"
+        period_days = int(p_str)
+
+        return t_str, channel_id, period_days, None
+
 
     async def run_daily_task(self, channel_id: int, period_days: int):
         print(f"Running task for channel {channel_id}")
@@ -105,9 +249,9 @@ class Scheduler(commands.Cog):
             return
             
         # Get Rank
-        tier, rank, lp = await opgg_client.get_rank_info(summoner)
+        tier, rank, lp, wins, losses = await opgg_client.get_rank_info(summoner)
             
-        await db.add_rank_history(discord_id, tier, rank, lp, date.today())
+        await db.add_rank_history(discord_id, tier, rank, lp, wins, losses, date.today())
 
 
     async def generate_report_table(self, users, today: date, period_days: int) -> str:
