@@ -44,12 +44,19 @@ class OPGGClient:
         # v3 logic (if instance exists and is not v2)
         if not IS_V2 and self.opgg_instance:
             try:
+                # Prefer search_async
+                search_method = self.opgg_instance.search
+                if hasattr(self.opgg_instance, 'search_async'):
+                    search_method = self.opgg_instance.search_async
+                    logging.info("Using search_async method")
+                
                 # Try Region object
-                res = await self.opgg_instance.search(query, region=region)
+                res = await search_method(query, region=region)
+                
                 if not res:
                     # Try region string
                     logging.info(f"v3 search returned nothing for {query} with {region}, trying with string '{region.value}'")
-                    res = await self.opgg_instance.search(query, region=region.value)
+                    res = await search_method(query, region=region.value)
                 
                 if res and len(res) > 0:
                     logging.info(f"v3 search found {len(res)} results for {query}")
