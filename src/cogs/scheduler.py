@@ -164,16 +164,38 @@ class Scheduler(commands.Cog):
 
         await interaction.response.send_message(f"{days_ago}日前として全ユーザーのランク情報を取得中... (数分かかる場合があります)")
         try:
-            await self.fetch_all_users_rank(days_ago)
-            await interaction.followup.send(f"{days_ago}日前としてのランク情報の取得が完了しました。")
+            results = await self.fetch_all_users_rank(days_ago)
+            total = results['total']
+            success = results['success']
+            failed = results['failed']
+            
+            msg = f"ランク情報の取得が完了しました。\n"
+            msg += f"- 対象ユーザー数: {total}\n"
+            msg += f"- 成功: {success}\n"
+            msg += f"- 失敗/スキップ: {failed}"
+            
+            await interaction.followup.send(msg)
         except Exception as e:
-            await interaction.followup.send(f"エラーが発生しました: {e}")
+            await interaction.followup.send(f"実行中にエラーが発生しました: {e}")
 
     @test_group.command(name="report", description="即座に指定した日数の集計結果を表示します")
     async def test_report(self, interaction: discord.Interaction, days: int = 7):
         await interaction.response.send_message(f"過去 {days} 日間の集計結果を出力します...")
         try:
-            await self.run_daily_report(interaction.channel.id, days)
+            users = await db.get_all_users()
+            if not users:
+                await interaction.followup.send("登録されているユーザーがいません。`/user add` で登録してください。")
+                return
+
+            today = date.today()
+            report = await self.generate_report_table(users, today, days)
+            
+            if len(report) > 1990:
+                chunks = [report[i:i+1900] for i in range(0, len(report), 1900)]
+                for chunk in chunks:
+                    await interaction.followup.send(f"```{chunk}```")
+            else:
+                await interaction.followup.send(f"```{report}```")
         except Exception as e:
             await interaction.followup.send(f"集計出力中にエラーが発生しました: {e}")
 
@@ -216,15 +238,25 @@ class Scheduler(commands.Cog):
 
     async def fetch_all_users_rank(self, days_ago: int = 1):
         print(f"Starting global rank collection (days_ago={days_ago})...")
-        # Collection at 01:00 records data for the specified day
+        # Collection records data for the specified day
         target_date = date.today() - timedelta(days=days_ago)
         users = await db.get_all_users()
+        
+        results = {'total': len(users), 'success': 0, 'failed': 0}
+        
         for user in users:
             try:
-                await self.fetch_and_save_rank(user, target_date)
+                success = await self.fetch_and_save_rank(user, target_date)
+                if success:
+                    results['success'] += 1
+                else:
+                    results['failed'] += 1
             except Exception as e:
                 print(f"Failed to fetch rank for user {user['riot_id']}: {e}")
-        print(f"Global rank collection for {target_date} completed.")
+                results['failed'] += 1
+                
+        print(f"Global rank collection for {target_date} completed: {results}")
+        return results
 
     async def run_daily_report(self, channel_id: int, period_days: int):
         print(f"Running report for channel {channel_id}")
@@ -263,26 +295,25 @@ class Scheduler(commands.Cog):
         discord_id = user['discord_id']
         riot_id = user['riot_id'] # Expected "Name#Tag"
         if '#' not in riot_id:
-            # Fallback or error
-            return
+            return False
 
         name, tag = riot_id.split('#', 1)
         
         # Get Summoner
-        # Using JP region default
         from opgg.params import Region
-        summoner = await opgg_client.get_summoner(name, tag, Region.JP)
-        
-        if not summoner:
-            # User might have changed name or OPGG issue
-            print(f"User not found on OPGG: {riot_id}")
-            # Could insert a 'skipped' record or just ignore
-            return
-            
-        # Get Rank
-        tier, rank, lp, wins, losses = await opgg_client.get_rank_info(summoner)
-            
-        await db.add_rank_history(discord_id, riot_id, tier, rank, lp, wins, losses, target_date)
+        try:
+            summoner = await opgg_client.get_summoner(name, tag, Region.JP)
+            if not summoner:
+                print(f"User not found on OPGG: {riot_id}")
+                return False
+                
+            # Get Rank
+            tier, rank, lp, wins, losses = await opgg_client.get_rank_info(summoner)
+            await db.add_rank_history(discord_id, riot_id, tier, rank, lp, wins, losses, target_date)
+            return True
+        except Exception as e:
+            print(f"Error in fetch_and_save_rank for {riot_id}: {e}")
+            return False
 
 
     async def generate_report_table(self, users, today: date, period_days: int) -> str:
