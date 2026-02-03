@@ -1,6 +1,6 @@
 import os
 import asyncpg
-from datetime import datetime, date
+from datetime import datetime, date, time
 
 class Database:
     def __init__(self):
@@ -77,13 +77,22 @@ class Database:
         async with self.pool.acquire() as conn:
             return await conn.fetchrow(query, discord_id)
 
-    async def register_schedule(self, schedule_time: str, channel_id: int, created_by: int, period_days: int):
-        # schedule_time is passed as string 'HH:MM:SS' or time object
-        # We can handle multiple schedules, or one per channel?
-        # Requirement implies "scheduling a time", implies adding a schedule.
+    async def register_schedule(self, schedule_time, channel_id: int, created_by: int, period_days: int):
+        # schedule_time might be string 'HH:MM' or 'HH:MM:SS'
+        if isinstance(schedule_time, str):
+            # Try to parse HH:MM or HH:MM:SS
+            try:
+                if len(schedule_time.split(':')) == 2:
+                    dt = datetime.strptime(schedule_time, "%H:%M")
+                else:
+                    dt = datetime.strptime(schedule_time, "%H:%M:%S")
+                schedule_time = dt.time()
+            except ValueError as e:
+                raise ValueError(f"Invalid time format: {schedule_time}") from e
+
         query = """
         INSERT INTO schedules (schedule_time, channel_id, created_by, period_days, update_date)
-        VALUES ($1::TIME, $2, $3, $4, CURRENT_TIMESTAMP)
+        VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
         RETURNING id
         """
         async with self.pool.acquire() as conn:
@@ -123,10 +132,20 @@ class Database:
         async with self.pool.acquire() as conn:
             await conn.execute(query, schedule_id)
 
-    async def update_schedule(self, schedule_id: int, schedule_time: str, channel_id: int, period_days: int):
+    async def update_schedule(self, schedule_id: int, schedule_time, channel_id: int, period_days: int):
+        if isinstance(schedule_time, str):
+            try:
+                if len(schedule_time.split(':')) == 2:
+                    dt = datetime.strptime(schedule_time, "%H:%M")
+                else:
+                    dt = datetime.strptime(schedule_time, "%H:%M:%S")
+                schedule_time = dt.time()
+            except ValueError as e:
+                raise ValueError(f"Invalid time format: {schedule_time}") from e
+
         query = """
         UPDATE schedules 
-        SET schedule_time = $2::TIME, channel_id = $3, period_days = $4, update_date = CURRENT_TIMESTAMP
+        SET schedule_time = $2, channel_id = $3, period_days = $4, update_date = CURRENT_TIMESTAMP
         WHERE id = $1
         """
         async with self.pool.acquire() as conn:
