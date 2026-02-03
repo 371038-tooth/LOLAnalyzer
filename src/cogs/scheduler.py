@@ -5,7 +5,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from src.database import db
 from src.utils import rank_calculator
 from src.utils.opgg_client import opgg_client
-from opgg.v2.params import Region
+from src.utils.opgg_compat import Region, OPGG, IS_V2
 from src.utils.graph_generator import generate_rank_graph
 from datetime import datetime, date, timedelta
 import asyncio
@@ -391,7 +391,6 @@ class Scheduler(commands.Cog):
         name, tag = riot_id.split('#', 1)
         
         # Get Summoner
-        from opgg.params import Region
         try:
             summoner = await opgg_client.get_summoner(name, tag, Region.JP)
             if not summoner:

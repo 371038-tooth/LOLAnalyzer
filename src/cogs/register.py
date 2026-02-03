@@ -4,7 +4,7 @@ from discord.ext import commands
 from src.database import db
 import asyncio
 from src.utils.opgg_client import opgg_client
-from opgg.v2.params import Region
+from src.utils.opgg_compat import Region
 import urllib.parse
 
 

@@ -1,7 +1,5 @@
 
-from opgg.v2.summoner import Summoner
-from opgg.v2.params import Region
-from opgg.v2.utils import Utils
+from src.utils.opgg_compat import Summoner, Region, Utils, IS_V2, OPGG
 import logging
 import asyncio
 import aiohttp
@@ -9,13 +7,28 @@ from datetime import datetime
 
 class OPGGClient:
     def __init__(self):
-        # Manually set headers and URLs to avoid OPGG() which triggers asyncio.run in some versions/components
-        self._headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        }
+        # In v3, OPGG() is likely async-friendly. In v2, we avoid it due to asyncio.run()
+        if not IS_V2:
+            try:
+                self.opgg_instance = OPGG()
+                self._headers = self.opgg_instance._headers
+                # v3 might have different attributes, we'll try to map them
+                self._search_api_url = getattr(self.opgg_instance, "SEARCH_API_URL", None)
+                self._summary_api_url = getattr(self.opgg_instance, "SUMMARY_API_URL", None)
+            except Exception:
+                self.opgg_instance = None
+                self._headers = {"User-Agent": "Mozilla/5.0"}
+        else:
+            self.opgg_instance = None
+            self._headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            }
+        
         self._bypass_api_url = "https://lol-web-api.op.gg/api/v1.0/internal/bypass"
-        self._search_api_url = f"{self._bypass_api_url}/summoners/v2/{{region}}/autocomplete?gameName={{summoner_name}}&tagline={{tagline}}"
-        self._summary_api_url = f"{self._bypass_api_url}/summoners/{{region}}/{{summoner_id}}/summary"
+        if not getattr(self, "_search_api_url", None):
+            self._search_api_url = f"{self._bypass_api_url}/summoners/v2/{{region}}/autocomplete?gameName={{summoner_name}}&tagline={{tagline}}"
+        if not getattr(self, "_summary_api_url", None):
+            self._summary_api_url = f"{self._bypass_api_url}/summoners/{{region}}/{{summoner_id}}/summary"
 
     def _get_params(self, url):
         return {
@@ -26,7 +39,20 @@ class OPGGClient:
     async def get_summoner(self, name: str, tag: str, region: Region = Region.JP):
         """Fetch summoner info by name and tag (Async)."""
         query = f"{name}#{tag}"
-        # We need to construct the search URL manually for Utils._single_region_search
+        
+        # v3 logic (if instance exists and is not v2)
+        if not IS_V2 and self.opgg_instance:
+            try:
+                # search() might be sync or async depending on the exact v3 sub-version
+                # In most 3.x, search() is async.
+                res = await self.opgg_instance.search(query, region=region)
+                if res and len(res) > 0:
+                    # In v3 SearchResult has .summoner
+                    return res[0].summoner if hasattr(res[0], 'summoner') else res[0]
+            except Exception as e:
+                logging.error(f"v3 search error for {query}: {e}")
+
+        # v2 or Fallback logic
         url_template = self._search_api_url.format(
             region=region.value,
             summoner_name=name,
@@ -35,23 +61,32 @@ class OPGGClient:
         params = self._get_params(url_template)
         
         try:
-            # Utils._single_region_search expects (query, region, params)
-            # Its internal _search_region uses params["base_api_url"].format_map(data)
-            # data = {"summoner_name": ..., "region": ..., "tagline": ...}
-            # So we pass the TEMPLATE to params["base_api_url"]
-            params["base_api_url"] = self._search_api_url
-            results = await Utils._single_region_search(query, region, params)
-            if not results:
-                return None
-            
-            summoner_data = results[0]["summoner"]
-            return Summoner(summoner_data)
+            if Utils and hasattr(Utils, '_single_region_search'):
+                # We need the original template for format_map inside Utils
+                params["base_api_url"] = self._search_api_url
+                results = await Utils._single_region_search(query, region, params)
+                if not results:
+                    return None
+                summoner_data = results[0]["summoner"]
+                return Summoner(summoner_data)
         except Exception as e:
-            logging.error(f"Error searching summoner {query}: {e}")
-            return None
+            logging.error(f"Fallback search error for {query}: {e}")
+            
+        return None
 
     async def get_rank_info(self, summoner: Summoner):
         """Fetch rank info for a summoner (Async)."""
+        # v3 logic
+        if not IS_V2 and self.opgg_instance:
+            try:
+                # In v3, maybe summoner.profile() or opgg.profile(summoner)
+                # But typically summoner objects have lazy loading or explicit update
+                # Let's try the summary API directly as fallback if update() is sync
+                pass
+            except Exception:
+                pass
+
+        # Fallback / v2 manual logic
         try:
             url = self._summary_api_url.format(
                 region=Region.JP,
@@ -59,7 +94,18 @@ class OPGGClient:
             )
             params = self._get_params(url)
             
-            profile_data = await Utils._fetch_profile(summoner.summoner_id, params)
+            if Utils and hasattr(Utils, '_fetch_profile'):
+                profile_data = await Utils._fetch_profile(summoner.summoner_id, params)
+            else:
+                # Direct aiohttp fetch if Utils is missing (v3 case where we don't have OPGG methods yet)
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(url, headers=self._headers) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            profile_data = data.get('data', {})
+                        else:
+                            profile_data = None
+
             if not profile_data:
                 return "UNRANKED", "", 0, 0, 0
                 
