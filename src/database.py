@@ -168,6 +168,17 @@ class Database:
         async with self.pool.acquire() as conn:
             return await conn.fetch(query, discord_id, riot_id, start_date, end_date)
 
+    async def get_rank_history_for_graph(self, discord_id: int, riot_id: str, start_date: date):
+        """Fetch rank history from start_date up to today, ordered by date."""
+        query = """
+        SELECT fetch_date, tier, rank, lp, wins, losses, games
+        FROM rank_history
+        WHERE discord_id = $1 AND riot_id = $2 AND fetch_date >= $3
+        ORDER BY fetch_date ASC
+        """
+        async with self.pool.acquire() as conn:
+            return await conn.fetch(query, discord_id, riot_id, start_date)
+
             
     async def get_all_users(self):
         query = "SELECT * FROM users"

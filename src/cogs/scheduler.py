@@ -5,9 +5,12 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from src.database import db
 from src.utils import rank_calculator
 from src.utils.opgg_client import opgg_client
+from opgg.v2.params import Region
+from src.utils.graph_generator import generate_rank_graph
 from datetime import datetime, date, timedelta
 import asyncio
 import re
+import io
 
 class Scheduler(commands.Cog):
     def __init__(self, bot):
@@ -48,6 +51,76 @@ class Scheduler(commands.Cog):
                 args=[channel_id, period_days]
             )
         print(f"Loaded {len(schedules)} reporting schedules and set Fetch Job at 01:00.")
+
+    @app_commands.command(name="graph", description="指定したユーザーのランク推移をグラフで表示します")
+    @app_commands.describe(
+        riot_id="表示するユーザーのRiot ID (例: Name#Tag)",
+        period="表示期間 (daily:1週間, weekly:2ヶ月, monthly:6ヶ月)",
+        force_fetch="最新の履歴をOPGGから取得して更新するか (default: False)"
+    )
+    async def graph(self, interaction: discord.Interaction, riot_id: str, period: str = "daily", force_fetch: bool = False):
+        await interaction.response.defer()
+        
+        # Validate period
+        if period not in ["daily", "weekly", "monthly"]:
+            await interaction.followup.send("不正な期間です。`daily`, `weekly`, `monthly` のいずれかを指定してください。", ephemeral=True)
+            return
+
+        # Find user in DB
+        user = await db.get_user_by_riot_id(riot_id)
+        if not user:
+            await interaction.followup.send(f"ユーザー {riot_id} は登録されていません。", ephemeral=True)
+            return
+
+        discord_id = user['discord_id']
+        
+        # Calculate start date
+        today_date = date.today()
+        if period == "daily":
+            start_date = today_date - timedelta(days=7)
+        elif period == "weekly":
+            start_date = today_date - timedelta(days=60)
+        else: # monthly
+            start_date = today_date - timedelta(days=180)
+
+        # Force fetch if requested
+        if force_fetch:
+            try:
+                # Need summoner object to get internal ID
+                name, tag = riot_id.split('#')
+                summoner = await opgg_client.get_summoner(name, tag, Region.JP)
+                if summoner:
+                    history = await opgg_client.get_tier_history(summoner.summoner_id, Region.JP)
+                    for entry in history:
+                        # Map OPGG history to rank_history
+                        h_date = entry['updated_at'].date()
+                        await db.add_rank_history(
+                            discord_id, riot_id, 
+                            entry['tier'], entry['rank'], entry['lp'],
+                            0, 0, h_date
+                        )
+            except Exception as e:
+                print(f"Error during force fetch: {e}")
+
+        # Fetch data from DB
+        rows = await db.get_rank_history_for_graph(discord_id, riot_id, start_date)
+        
+        if not rows:
+            await interaction.followup.send("表示するデータがありません。(`/test fetch` でデータを取得してください)")
+            return
+
+        # Generate Graph
+        # rows are asyncpg Record objects, convert to dict if needed? 
+        # graph_generator expects Dict with keys
+        row_dicts = [dict(r) for r in rows]
+        
+        buf = generate_rank_graph(row_dicts, period, riot_id)
+        if not buf:
+            await interaction.followup.send("グラフの生成に失敗しました。")
+            return
+
+        file = discord.File(fp=buf, filename="rank_graph.png")
+        await interaction.followup.send(f"**{riot_id}** のランク推移 ({period})", file=file)
 
     # Schedule Command Group
     schedule_group = app_commands.Group(name="schedule", description="定期実行スケジュールを管理します")
@@ -156,23 +229,20 @@ class Scheduler(commands.Cog):
     # Test Command Group
     test_group = app_commands.Group(name="test", description="動作確認用のテストコマンドです")
 
-    @test_group.command(name="fetch", description="即座に全ユーザーのランク情報を取得します(01:00の取得と同じ動作)")
-    async def test_fetch(self, interaction: discord.Interaction, days_ago: int = 1):
-        if not (0 <= days_ago <= 7):
-            await interaction.response.send_message("days_ago は 0 から 7 の範囲で指定してください。", ephemeral=True)
-            return
-
-        await interaction.response.send_message(f"{days_ago}日前として全ユーザーのランク情報を取得中... (数分かかる場合があります)")
+    @test_group.command(name="fetch", description="全ユーザーの現在のランク情報を取得します。Backfillを指定すると過去分も取得します")
+    @app_commands.describe(backfill="OPGGの履歴から過去分も取得するか (default: False)")
+    async def test_fetch(self, interaction: discord.Interaction, backfill: bool = False):
+        await interaction.response.defer()
         try:
-            results = await self.fetch_all_users_rank(days_ago)
+            results = await self.fetch_all_users_rank(backfill=backfill)
             total = results['total']
             success = results['success']
             failed = results['failed']
             
-            msg = f"ランク情報の取得が完了しました。\n"
+            msg = f"ランク情報の取得が完了しました。 (Backfill: {backfill})\n"
             msg += f"- 対象ユーザー数: {total}\n"
             msg += f"- 成功: {success}\n"
-            msg += f"- 失敗/スキップ: {failed}"
+            msg += f"- 失敗: {failed}"
             
             await interaction.followup.send(msg)
         except Exception as e:
@@ -236,26 +306,47 @@ class Scheduler(commands.Cog):
 
         return t_str, channel_id, period_days, None
 
-    async def fetch_all_users_rank(self, days_ago: int = 1):
-        print(f"Starting global rank collection (days_ago={days_ago})...")
-        # Collection records data for the specified day
-        target_date = date.today() - timedelta(days=days_ago)
+    async def fetch_all_users_rank(self, backfill: bool = False):
+        """Fetch current rank and optionally backfill history."""
+        print(f"Starting global rank collection (backfill={backfill})...")
+        today = date.today()
         users = await db.get_all_users()
         
         results = {'total': len(users), 'success': 0, 'failed': 0}
         
         for user in users:
+            uid = user['discord_id']
+            rid = user['riot_id']
             try:
-                success = await self.fetch_and_save_rank(user, target_date)
+                # 1. Fetch Current
+                success = await self.fetch_and_save_rank(user, today)
                 if success:
                     results['success'] += 1
                 else:
                     results['failed'] += 1
+                
+                # 2. Backfill if requested
+                if backfill and '#' in rid:
+                    name, tag = rid.split('#')
+                    summoner = await opgg_client.get_summoner(name, tag, Region.JP)
+                    if summoner:
+                        history = await opgg_client.get_tier_history(summoner.summoner_id, Region.JP)
+                        for entry in history:
+                            h_date = entry['updated_at'].date()
+                            # Avoid overwriting today's report
+                            if h_date < today:
+                                await db.add_rank_history(
+                                    uid, rid, 
+                                    entry['tier'], entry['rank'], entry['lp'],
+                                    0, 0, h_date
+                                )
+                
+                await asyncio.sleep(1) # Base rate limiting
             except Exception as e:
-                print(f"Failed to fetch rank for user {user['riot_id']}: {e}")
+                print(f"Failed to fetch rank for user {rid}: {e}")
                 results['failed'] += 1
                 
-        print(f"Global rank collection for {target_date} completed: {results}")
+        print(f"Global rank collection completed: {results}")
         return results
 
     async def run_daily_report(self, channel_id: int, period_days: int):
@@ -422,13 +513,13 @@ class Scheduler(commands.Cog):
         # Build Table String manually for alignment
         import unicodedata
         def get_display_width(s):
-            """Calculate display width considering full-width and ambiguous characters."""
+            """Calculate display width considering full-width characters."""
             width = 0
             for char in str(s):
                 eaw = unicodedata.east_asian_width(char)
-                # 'W' (Wide), 'F' (Fullwidth), and 'A' (Ambiguous like ±, ⇒)
-                # Discord monospaced font often renders Ambiguous as double-width.
-                if eaw in ('W', 'F', 'A'):
+                # 'W' (Wide) and 'F' (Fullwidth) are 2 cells
+                # 'A' (Ambiguous) symbols like ± or ⇒ are usually 1 cell in Discord code blocks
+                if eaw in ('W', 'F'):
                     width += 2
                 else:
                     width += 1
