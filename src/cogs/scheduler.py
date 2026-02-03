@@ -222,14 +222,6 @@ class Scheduler(commands.Cog):
 
     async def fetch_and_save_rank(self, user):
         discord_id = user['discord_id']
-        # We stored fake PUUID or OPGG ID in puuid field.
-        # But OPGG client needs name#tag to search again OR we can try to use stored ID if library supports it.
-        # The library's `get_rank_info` takes a Summoner object.
-        # We can reconstruct Summoner object if we had enough info, but better to re-search or use ID.
-        # For simplicity and robustness (names change), using ID would be better if supported.
-        # However, opgg.py v2/v3 mainly searches by name.
-        # Re-fetching by name#tag (stored in riot_id) is safest for now.
-        
         riot_id = user['riot_id'] # Expected "Name#Tag"
         if '#' not in riot_id:
             # Fallback or error
@@ -251,29 +243,33 @@ class Scheduler(commands.Cog):
         # Get Rank
         tier, rank, lp, wins, losses = await opgg_client.get_rank_info(summoner)
             
-        await db.add_rank_history(discord_id, tier, rank, lp, wins, losses, date.today())
+        await db.add_rank_history(discord_id, riot_id, tier, rank, lp, wins, losses, date.today())
 
 
     async def generate_report_table(self, users, today: date, period_days: int) -> str:
         # Determine date range
         start_date = today - timedelta(days=period_days)
-        # We want to display all dates in range? Or just those with data?
-        # User example: 1/15 | 1/17 ... (dates with data?)
-        # "1週間分出したいのであれば7" -> 7 days back.
         
-        # Fetch history for all users in one go per user (optimized later, loop for now)
-        data_map = {} # {user_id: {date: {tier, rank, lp}}}
+        # Fetch history for all users
+        data_map = {} # {(discord_id, riot_id): {date: {tier, rank, lp, wins, losses}}}
         all_dates = set()
         
         for user in users:
             uid = user['discord_id']
-            history = await db.get_rank_history(uid, start_date, today)
+            rid = user['riot_id']
+            history = await db.get_rank_history(uid, rid, start_date, today)
             user_history = {}
             for h in history:
                 d = h['fetch_date'] # datetime.date
-                user_history[d] = {'tier': h['tier'], 'rank': h['rank'], 'lp': h['lp']}
+                user_history[d] = {
+                    'tier': h['tier'], 
+                    'rank': h['rank'], 
+                    'lp': h['lp'],
+                    'wins': h['wins'],
+                    'losses': h['losses']
+                }
                 all_dates.add(d)
-            data_map[uid] = user_history
+            data_map[(uid, rid)] = user_history
             
         sorted_dates = sorted(list(all_dates))
         if not sorted_dates:
@@ -284,23 +280,17 @@ class Scheduler(commands.Cog):
             return d.strftime("%m/%d")
 
         # Headers
-        # | 日付 | ... dates ... | 比 |
-        # Actually user example: empty corner cell? "       1/15|..."
-        headers = ["Nom"] + [format_date_header(d) for d in sorted_dates] + ["Diff"]
-        
-        # Adjust column widths? Use simple CSV-like with pipes or aligned?
-        # Aligned is better.
+        headers = ["Nom"] + [format_date_header(d) for d in sorted_dates] + ["Diff", "W/L"]
         
         vals = [] # List of rows
         
         for user in users:
             uid = user['discord_id']
-            h_map = data_map.get(uid, {})
+            rid = user['riot_id']
+            h_map = data_map.get((uid, rid), {})
             
             # User Name
-            # We can use riot_id from DB or discord name (requires lookup)
-            # User example uses "abc" (looks like short name). RiotID is good.
-            name = user['riot_id'].split('#')[0] # Show GameName only for brevity?
+            name = rid.split('#')[0]
             
             row = [name]
             
@@ -313,49 +303,44 @@ class Scheduler(commands.Cog):
                 row.append(cell)
             
             # Diff Calculation
-            # "前日比" (Yesterday vs Today) and "Period Start vs Today"
-            # Today's data
             today_entry = h_map.get(today)
-            
-            # Yesterday (or latest previous entry?)
-            # User example requirement: "前日比は必ず出す"
             yesterday = today - timedelta(days=1)
             yesterday_entry = h_map.get(yesterday)
             
-            # If no yesterday entry, maybe use latest available before today? 
-            # Requirement says "前日比". If no data for yesterday, maybe "-" or compare with latest?
-            # Let's look for yesterday strictly first.
-            
             # Period Start (or earliest in range)
             start_entry = h_map.get(sorted_dates[0])
-            if start_entry == today_entry: # If start is today (only 1 day data), avoid redundant diff
+            if start_entry == today_entry:
                 start_entry = None
 
             diff_texts = []
-            
-            # 1. Yesterday Diff (Strict yesterday or previous available?)
-            # "前日比" usually means vs Yesterday.
             if yesterday_entry and today_entry:
                 d_text = rank_calculator.calculate_diff_text(yesterday_entry, today_entry)
                 diff_texts.append(f"前日比 {d_text}")
             elif today_entry:
-                 # Try to find the previous entry if yesterday is missing?
-                 # User example shows explicit dates. If 1/15, 1/17... data exists.
-                 # If 1/16 is missing, maybe compare with 1/15 as "Previous"?
-                 # But "前日比" implies Yesterday. I'll stick to strict yesterday if exists, else "Prev".
-                 # Actually, let's just use "Previous Day" if available.
-                 pass
+                pass
 
-            # 2. Period Diff
             if len(sorted_dates) >= 2 and start_entry and today_entry and start_entry != yesterday_entry:
-                 # "7日前比" -> Label based on actual days diff?
-                 day_diff = (today - sorted_dates[0]).days
-                 d_text = rank_calculator.calculate_diff_text(start_entry, today_entry)
-                 diff_texts.append(f"{day_diff}日前比 {d_text}")
+                day_diff = (today - sorted_dates[0]).days
+                d_text = rank_calculator.calculate_diff_text(start_entry, today_entry)
+                diff_texts.append(f"{day_diff}日前比 {d_text}")
             elif not diff_texts and today_entry:
-                 diff_texts.append("履歴なし")
+                diff_texts.append("履歴なし")
 
             row.append(" | ".join(diff_texts))
+
+            # Daily W/L Calculation
+            wl_text = "-"
+            if today_entry and yesterday_entry:
+                d_wins = today_entry['wins'] - yesterday_entry['wins']
+                d_losses = today_entry['losses'] - yesterday_entry['losses']
+                if d_wins > 0 or d_losses > 0:
+                    wl_text = f"{d_wins}W {d_losses}L"
+                else:
+                    wl_text = "0戦"
+            elif today_entry:
+                wl_text = "new"
+
+            row.append(wl_text)
             vals.append(row)
 
         # Build Table String manually for alignment
