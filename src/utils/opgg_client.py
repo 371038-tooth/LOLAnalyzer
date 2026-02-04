@@ -165,11 +165,27 @@ class OPGGClient:
             logger.info(f"Found {len(stats)} league_stats entries")
             
             for i, stat in enumerate(stats):
+                # Log full stat structure for debugging
+                stat_keys = list(stat.keys()) if isinstance(stat, dict) else str(stat)
+                logger.info(f"Stat {i} keys: {stat_keys}")
+                
+                # Try different ways to identify queue type
                 queue_info = stat.get('queue_info', {})
                 game_type = queue_info.get('game_type', '').upper()
-                logger.info(f"Stat {i}: game_type={game_type}")
                 
-                if game_type in ['SOLORANKED', 'RANKED_SOLO_5X5', 'SOLO']:
+                # Alternative: check for queue_type key directly
+                if not game_type:
+                    game_type = stat.get('queue_type', '').upper()
+                # Alternative: check for tier_info.queue_type
+                if not game_type:
+                    tier_info = stat.get('tier_info', {})
+                    if isinstance(tier_info, dict):
+                        game_type = tier_info.get('queue_type', '').upper()
+                
+                logger.info(f"Stat {i}: game_type='{game_type}', tier_info={stat.get('tier_info')}")
+                
+                # Check for various Solo Queue identifiers or just take the first ranked one
+                if game_type in ['SOLORANKED', 'RANKED_SOLO_5X5', 'SOLO', 'RANKED_SOLO_5X5']:
                     tier_info = stat.get('tier_info') or stat
                     logger.info(f"tier_info keys: {list(tier_info.keys()) if isinstance(tier_info, dict) else tier_info}")
                     
@@ -181,6 +197,19 @@ class OPGGClient:
                     
                     logger.info(f"Extracted: tier={tier}, division={division}, lp={lp}")
                     return tier, self.division_to_roman(division), lp, wins, losses
+            
+            # If no specific queue type was matched, try to find any ranked data
+            for i, stat in enumerate(stats):
+                tier_info = stat.get('tier_info')
+                if tier_info and isinstance(tier_info, dict):
+                    tier = tier_info.get('tier', '').upper()
+                    if tier and tier != 'UNRANKED':
+                        division = tier_info.get('division') or tier_info.get('rank') or ""
+                        lp = tier_info.get('lp', 0)
+                        wins = stat.get('win', 0)
+                        losses = stat.get('lose', 0)
+                        logger.info(f"Found ranked data in stat {i}: {tier} {division} {lp}LP")
+                        return tier, self.division_to_roman(division), lp, wins, losses
             
             logger.warning(f"No SOLORANKED stats found in league_stats")
             return "UNRANKED", "", 0, 0, 0
