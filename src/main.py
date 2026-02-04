@@ -1,5 +1,6 @@
 import os
 import sys
+import logging
 from pathlib import Path
 
 # Add project root to sys.path to ensure 'src' package is found
@@ -10,6 +11,14 @@ if str(root_path) not in sys.path:
 import discord
 from discord.ext import commands
 from src.database import db
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] [%(levelname)-8s] %(name)s: %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
 class LOLBot(commands.Bot):
     def __init__(self):

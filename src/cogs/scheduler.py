@@ -9,8 +9,10 @@ from src.utils.opgg_compat import Region, OPGG, IS_V2
 from src.utils.graph_generator import generate_rank_graph
 from datetime import datetime, date, timedelta
 import asyncio
-import re
 import io
+import logging
+
+logger = logging.getLogger(__name__)
 
 class Scheduler(commands.Cog):
     def __init__(self, bot):
@@ -308,7 +310,7 @@ class Scheduler(commands.Cog):
 
     async def fetch_all_users_rank(self, backfill: bool = False):
         """Fetch current rank and optionally backfill history."""
-        print(f"Starting global rank collection (backfill={backfill})...")
+        logger.info(f"Starting global rank collection (backfill={backfill})...")
         today = date.today()
         users = await db.get_all_users()
         
@@ -343,10 +345,10 @@ class Scheduler(commands.Cog):
                 
                 await asyncio.sleep(1) # Base rate limiting
             except Exception as e:
-                print(f"Failed to fetch rank for user {rid}: {e}")
+                logger.error(f"Failed to fetch rank for user {rid}: {e}")
                 results['failed'] += 1
                 
-        print(f"Global rank collection completed: {results}")
+        logger.info(f"Global rank collection completed: {results}")
         return results
 
     async def run_daily_report(self, channel_id: int, period_days: int):
@@ -392,17 +394,19 @@ class Scheduler(commands.Cog):
         
         # Get Summoner
         try:
+            logger.info(f"Fetching rank for {riot_id} on {target_date}")
             summoner = await opgg_client.get_summoner(name, tag, Region.JP)
             if not summoner:
-                print(f"User not found on OPGG: {riot_id}")
+                logger.warning(f"User not found on OPGG: {riot_id}")
                 return False
                 
             # Get Rank
             tier, rank, lp, wins, losses = await opgg_client.get_rank_info(summoner)
+            logger.info(f"Rank info for {riot_id}: {tier} {rank} {lp}LP (W:{wins} L:{losses})")
             await db.add_rank_history(discord_id, riot_id, tier, rank, lp, wins, losses, target_date)
             return True
         except Exception as e:
-            print(f"Error in fetch_and_save_rank for {riot_id}: {e}")
+            logger.error(f"Error in fetch_and_save_rank for {riot_id}: {e}", exc_info=True)
             return False
 
 
