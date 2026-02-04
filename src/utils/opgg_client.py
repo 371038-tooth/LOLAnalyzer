@@ -113,45 +113,55 @@ class OPGGClient:
 
     async def get_rank_info(self, summoner: Summoner):
         """Fetch rank info for a summoner (Async)."""
-        # Fallback / v2 manual logic
         try:
-            # Note: Ensure region is lowercase if needed
-            region_str = "jp" # Default to jp
+            region_str = "jp"
             url = self._summary_api_url.format(
                 region=region_str,
                 summoner_id=summoner.summoner_id
             )
-            params = self._get_params(url)
             
             profile_data = None
-            # Try Utils if available but wrap it
-            if Utils and hasattr(Utils, '_fetch_profile'):
-                try:
-                    # Some versions might need region as 2nd arg
-                    profile_data = await Utils._fetch_profile(summoner.summoner_id, params)
-                except Exception as e:
-                    logger.debug(f"Utils._fetch_profile failed, trying with 3 args: {e}")
-                    try:
-                        profile_data = await Utils._fetch_profile(summoner.summoner_id, region_str, params)
-                    except Exception:
-                        profile_data = None
-            
-            if not profile_data:
-                # Direct aiohttp fetch fallback
-                logger.info(f"Fetching rank info via aiohttp: {url}")
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(url, headers=self._headers) as resp:
-                        logger.info(f"Rank info response status: {resp.status}")
-                        if resp.status == 200:
-                            data = await resp.json()
-                            profile_data = data.get('data', {})
-                            logger.info(f"Profile data keys: {list(profile_data.keys()) if isinstance(profile_data, dict) else 'not a dict'}")
+            # Direct aiohttp fetch
+            logger.info(f"Fetching rank info via aiohttp: {url}")
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=self._headers) as resp:
+                    logger.info(f"Rank info response status: {resp.status}")
+                    if resp.status == 200:
+                        data = await resp.json()
+                        profile_data = data.get('data', {})
+                        # Log ALL keys for debugging
+                        logger.info(f"Profile data keys: {list(profile_data.keys()) if isinstance(profile_data, dict) else 'not a dict'}")
+                        
+                        # Log summoner sub-keys if present
+                        if 'summoner' in profile_data:
+                            summoner_data = profile_data['summoner']
+                            logger.info(f"summoner sub-keys: {list(summoner_data.keys()) if isinstance(summoner_data, dict) else summoner_data}")
+                            # Check for league_stats inside summoner
+                            if 'league_stats' in summoner_data:
+                                logger.info(f"Found league_stats inside summoner object!")
 
             if not profile_data:
                 logger.warning(f"No profile_data found for summoner {summoner.summoner_id}")
                 return "UNRANKED", "", 0, 0, 0
-                
+            
+            # Try multiple locations for league_stats
             stats = profile_data.get('league_stats', [])
+            if not stats and 'summoner' in profile_data:
+                # Try inside summoner object
+                summoner_obj = profile_data.get('summoner', {})
+                stats = summoner_obj.get('league_stats', [])
+                if stats:
+                    logger.info(f"Found league_stats inside summoner: {len(stats)} entries")
+                # Also check for solo_tier_info directly
+                if not stats and 'solo_tier_info' in summoner_obj:
+                    tier_info = summoner_obj['solo_tier_info']
+                    logger.info(f"Found solo_tier_info directly: {tier_info}")
+                    if tier_info:
+                        tier = tier_info.get('tier', 'UNRANKED').upper()
+                        division = tier_info.get('division') or tier_info.get('rank') or ""
+                        lp = tier_info.get('lp', 0)
+                        return tier, self.division_to_roman(division), lp, 0, 0
+            
             logger.info(f"Found {len(stats)} league_stats entries")
             
             for i, stat in enumerate(stats):
