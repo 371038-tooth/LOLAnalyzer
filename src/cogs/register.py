@@ -79,7 +79,8 @@ class Register(commands.Cog):
                 return
             
             fake_puuid = f"OPGG:{summoner.summoner_id}"
-            real_riot_id = f"{summoner.name}#{tag_line.upper()}"
+            # Use the user-provided game_name to preserve Japanese characters
+            real_riot_id = f"{game_name}#{tag_line.upper()}"
             
             await db.register_user(target_user.id, real_riot_id, fake_puuid)
             await interaction.followup.send(f"登録完了: {target_user.display_name} -> {real_riot_id}")

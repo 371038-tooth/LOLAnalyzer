@@ -140,19 +140,27 @@ class OPGGClient:
             
             if not profile_data:
                 # Direct aiohttp fetch fallback
+                logging.info(f"Fetching rank info via aiohttp: {url}")
                 async with aiohttp.ClientSession() as session:
                     async with session.get(url, headers=self._headers) as resp:
+                        logging.info(f"Rank info response status: {resp.status}")
                         if resp.status == 200:
                             data = await resp.json()
                             profile_data = data.get('data', {})
+                            # Log the keys we received to understand structure
+                            logging.info(f"Profile data keys: {list(profile_data.keys()) if isinstance(profile_data, dict) else 'not a dict'}")
 
             if not profile_data:
+                logging.warning(f"No profile_data found for summoner {summoner.summoner_id}")
                 return "UNRANKED", "", 0, 0, 0
                 
             stats = profile_data.get('league_stats', [])
-            for stat in stats:
+            logging.info(f"Found {len(stats)} league_stats entries")
+            
+            for i, stat in enumerate(stats):
                 queue_info = stat.get('queue_info', {})
                 game_type = queue_info.get('game_type', '').upper()
+                logging.info(f"Stat {i}: game_type={game_type}")
                 
                 # Check for various Solo Queue identifiers
                 if game_type in ['SOLORANKED', 'RANKED_SOLO_5X5', 'SOLO']:
@@ -162,6 +170,8 @@ class OPGGClient:
                         # Maybe it's flat in stat?
                         tier_info = stat
                     
+                    logging.info(f"tier_info keys: {list(tier_info.keys()) if isinstance(tier_info, dict) else tier_info}")
+                    
                     tier = tier_info.get('tier', 'UNRANKED').upper()
                     # OPGG sometimes uses 'division' (int 1-4) or 'rank' (int 1-4 or Roman)
                     division = tier_info.get('division') or tier_info.get('rank') or ""
@@ -169,8 +179,10 @@ class OPGGClient:
                     wins = stat.get('win', 0)
                     losses = stat.get('lose', 0)
                     
+                    logging.info(f"Extracted: tier={tier}, division={division}, lp={lp}")
                     return tier, self.division_to_roman(division), lp, wins, losses
             
+            logging.warning(f"No SOLORANKED stats found in league_stats")
             return "UNRANKED", "", 0, 0, 0
         except Exception as e:
             logging.error(f"Error fetching rank info: {e}")

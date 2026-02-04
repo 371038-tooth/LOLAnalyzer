@@ -452,7 +452,7 @@ class Scheduler(commands.Cog):
             return f"{g}戦{w}勝 勝率{int(rate)}％"
 
         # Headers
-        headers = ["Nom"] + [format_date_header(d) for d in sorted_dates] + ["前日比", f"{period_days}日比", "戦績（前日）", f"戦績（{period_days}日分）"]
+        headers = ["RIOT ID"] + [format_date_header(d) for d in sorted_dates] + ["前日比", f"{period_days}日比", "戦績（前日）", f"戦績（{period_days}日分）"]
         
         # Determine anchor date for Diff (Latest available in sorted_dates)
         anchor_date = sorted_dates[-1] if sorted_dates else today
@@ -464,8 +464,8 @@ class Scheduler(commands.Cog):
             rid = user['riot_id']
             h_map = data_map.get((uid, rid), {})
             
-            # User Name
-            name = rid.split('#')[0]
+            # User Name - show full Riot ID including tag
+            name = rid
             
             row = [name]
             
