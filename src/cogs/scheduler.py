@@ -228,30 +228,38 @@ class Scheduler(commands.Cog):
 """
         await interaction.response.send_message(msg)
 
-    # Test Command Group
-    test_group = app_commands.Group(name="test", description="動作確認用のテストコマンドです")
-
-    @test_group.command(name="fetch", description="全ユーザーの現在のランク情報を取得します。Backfillを指定すると過去分も取得します")
-    @app_commands.describe(backfill="OPGGの履歴から過去分も取得するか (default: False)")
-    async def test_fetch(self, interaction: discord.Interaction, backfill: bool = False):
+    @app_commands.command(name="fetch", description="指定したユーザーの現在のランク情報を取得してDBに登録します")
+    @app_commands.describe(riot_id="対象ユーザーのRiot ID (例: Name#Tag)")
+    async def fetch(self, interaction: discord.Interaction, riot_id: str):
         await interaction.response.defer()
         try:
-            results = await self.fetch_all_users_rank(backfill=backfill)
-            total = results['total']
-            success = results['success']
-            failed = results['failed']
+            # Find user in DB
+            user = await db.get_user_by_riot_id(riot_id)
+            if not user:
+                await interaction.followup.send(f"ユーザー `{riot_id}` は登録されていません。`/user add` で登録してください。")
+                return
             
-            msg = f"ランク情報の取得が完了しました。 (Backfill: {backfill})\n"
-            msg += f"- 対象ユーザー数: {total}\n"
-            msg += f"- 成功: {success}\n"
-            msg += f"- 失敗: {failed}"
-            
-            await interaction.followup.send(msg)
+            # Fetch and save current rank
+            success = await self.fetch_and_save_rank(user)
+            if success:
+                # Get the latest rank from DB to display
+                today = date.today()
+                history = await db.get_rank_history(user['discord_id'], riot_id, today, today)
+                if history:
+                    h = history[0]
+                    rank_display = rank_calculator.format_rank_display(h['tier'], h['rank'], h['lp'])
+                    await interaction.followup.send(f"✅ `{riot_id}` のランク情報を取得しました: **{rank_display}**")
+                else:
+                    await interaction.followup.send(f"✅ `{riot_id}` のランク情報を取得しましたが、履歴の確認に失敗しました。")
+            else:
+                await interaction.followup.send(f"❌ `{riot_id}` のランク情報取得に失敗しました。OPGGで見つからないか、エラーが発生しました。")
         except Exception as e:
+            logger.error(f"Error in fetch command: {e}", exc_info=True)
             await interaction.followup.send(f"実行中にエラーが発生しました: {e}")
 
-    @test_group.command(name="report", description="即座に指定した日数の集計結果を表示します")
-    async def test_report(self, interaction: discord.Interaction, days: int = 7):
+    @app_commands.command(name="report", description="指定した日数の集計結果を表示します")
+    @app_commands.describe(days="集計期間 (日数、デフォルト: 7)")
+    async def report(self, interaction: discord.Interaction, days: int = 7):
         await interaction.response.send_message(f"過去 {days} 日間の集計結果を出力します...")
         try:
             users = await db.get_all_users()
@@ -269,6 +277,7 @@ class Scheduler(commands.Cog):
             else:
                 await interaction.followup.send(f"```{report}```")
         except Exception as e:
+            logger.error(f"Error in report command: {e}", exc_info=True)
             await interaction.followup.send(f"集計出力中にエラーが発生しました: {e}")
 
     def parse_schedule_input(self, text: str, current_channel_id: int):
