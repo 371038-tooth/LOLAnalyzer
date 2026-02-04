@@ -1,9 +1,10 @@
-
 from src.utils.opgg_compat import Summoner, Region, Utils, IS_V2, OPGG
 import logging
 import asyncio
 import aiohttp
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 class OPGGClient:
     def __init__(self):
@@ -18,17 +19,15 @@ class OPGGClient:
             except Exception:
                 self.opgg_instance = None
                 self._headers = {"User-Agent": "Mozilla/5.0"}
-        else:
-            self.opgg_instance = None
             self._headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             }
         
-        self._bypass_api_url = "https://lol-web-api.op.gg/api/v1.0/internal/bypass"
+        self._bypass_api_url = "https://lol-api-summoner.op.gg/api"
         if not getattr(self, "_search_api_url", None):
-            self._search_api_url = f"{self._bypass_api_url}/summoners/v2/{{region}}/autocomplete?gameName={{summoner_name}}&tagline={{tagline}}"
+            self._search_api_url = f"{self._bypass_api_url}/v3/{{region}}/summoners?riot_id={{summoner_name}}%23{{tagline}}"
         if not getattr(self, "_summary_api_url", None):
-            self._summary_api_url = f"{self._bypass_api_url}/summoners/{{region}}/{{summoner_id}}/summary"
+            self._summary_api_url = f"{self._bypass_api_url}/{{region}}/summoners/{{summoner_id}}/summary"
 
     def _get_params(self, url):
         return {
@@ -39,7 +38,7 @@ class OPGGClient:
     async def get_summoner(self, name: str, tag: str, region: Region = Region.JP):
         """Fetch summoner info by name and tag (Async)."""
         query = f"{name}#{tag}"
-        logging.info(f"Searching for summoner: {query} (Region: {region}, IS_V2: {IS_V2})")
+        logger.info(f"Searching for summoner: {query} (Region: {region}, IS_V2: {IS_V2})")
         
         # v3 logic (if instance exists and is not v2)
         if not IS_V2 and self.opgg_instance:
@@ -48,24 +47,25 @@ class OPGGClient:
                 search_method = self.opgg_instance.search
                 if hasattr(self.opgg_instance, 'search_async'):
                     search_method = self.opgg_instance.search_async
-                    logging.info("Using search_async method")
+                    logger.info("Using search_async method")
                 
                 # Try Region object
                 res = await search_method(query, region=region)
                 
                 if not res:
                     # Try region string
-                    logging.info(f"v3 search returned nothing for {query} with {region}, trying with string '{region.value}'")
-                    res = await search_method(query, region=region.value)
+                    region_str = region.value.lower() if hasattr(region, 'value') else str(region).lower()
+                    logger.info(f"v3 search returned nothing for {query} with {region}, trying with string '{region_str}'")
+                    res = await search_method(query, region=region_str)
                 
                 if res and len(res) > 0:
-                    logging.info(f"v3 search found {len(res)} results for {query}")
+                    logger.info(f"v3 search found {len(res)} results for {query}")
                     # In v3 SearchResult has .summoner
                     return res[0].summoner if hasattr(res[0], 'summoner') else res[0]
                 else:
-                    logging.info(f"v3 search returned no results for {query}")
+                    logger.info(f"v3 search returned no results for {query}")
             except Exception as e:
-                logging.error(f"v3 search error for {query}: {e}")
+                logger.error(f"v3 search error for {query}: {e}")
 
         # v2 or Fallback logic
         region_str = region.value.lower() if hasattr(region, 'value') else str(region).lower()
@@ -75,59 +75,48 @@ class OPGGClient:
             tagline=tag
         )
         params = self._get_params(url_template)
-        logging.info(f"Using fallback search for {query} (URL: {url_template})")
+        logger.info(f"Using fallback search for {query} (URL: {url_template})")
         
         try:
             # 1. Try Utils if available
             if Utils and hasattr(Utils, '_single_region_search'):
-                params["base_api_url"] = self._search_api_url
-                results = await Utils._single_region_search(query, region, params)
-                if results:
-                    logging.info(f"Fallback search (Utils) found {len(results)} results")
-                    summoner_data = results[0]["summoner"]
-                    return Summoner(summoner_data)
+                try:
+                    params["base_api_url"] = self._search_api_url
+                    results = await Utils._single_region_search(query, region, params)
+                    if results:
+                        logger.info(f"Fallback search (Utils) found {len(results)} results")
+                        summoner_data = results[0]["summoner"]
+                        return Summoner(summoner_data)
+                except Exception as e:
+                    logger.debug(f"Utils search failed, falling back to raw: {e}")
 
             # 2. Try raw aiohttp request (Last resort)
-            logging.info(f"Trying raw aiohttp search for {query}")
+            logger.info(f"Trying raw aiohttp search for {query}")
             async with aiohttp.ClientSession() as session:
-                # We need to format the URL manually because self._search_api_url has placeholders
-                url = self._search_api_url.format(
-                    region=region_str,
-                    summoner_name=name,
-                    tagline=tag
-                )
+                url = url_template
                 headers = self._headers
                 async with session.get(url, headers=headers) as response:
                     if response.status == 200:
                         data = await response.json()
                         results = data.get('data', [])
                         if results:
-                            logging.info(f"Raw aiohttp search found {len(results)} results")
+                            logger.info(f"Raw aiohttp search found {len(results)} results")
                             summoner_data = results[0]
                             return Summoner(summoner_data)
                     else:
-                        logging.error(f"Raw aiohttp search failed with status {response.status}")
+                        logger.error(f"Raw aiohttp search failed with status {response.status}")
 
         except Exception as e:
-            logging.error(f"Fallback search error for {query}: {e}")
+            logger.error(f"Fallback search error for {query}: {e}")
             
         return None
 
     async def get_rank_info(self, summoner: Summoner):
         """Fetch rank info for a summoner (Async)."""
-        # v3 logic
-        if not IS_V2 and self.opgg_instance:
-            try:
-                # In v3, maybe summoner.profile() or opgg.profile(summoner)
-                # But typically summoner objects have lazy loading or explicit update
-                pass
-            except Exception:
-                pass
-
         # Fallback / v2 manual logic
         try:
             # Note: Ensure region is lowercase if needed
-            region_str = "jp" # Default to jp for now as per previous logic
+            region_str = "jp" # Default to jp
             url = self._summary_api_url.format(
                 region=region_str,
                 summoner_id=summoner.summoner_id
@@ -135,57 +124,58 @@ class OPGGClient:
             params = self._get_params(url)
             
             profile_data = None
+            # Try Utils if available but wrap it
             if Utils and hasattr(Utils, '_fetch_profile'):
-                profile_data = await Utils._fetch_profile(summoner.summoner_id, params)
+                try:
+                    # Some versions might need region as 2nd arg
+                    profile_data = await Utils._fetch_profile(summoner.summoner_id, params)
+                except Exception as e:
+                    logger.debug(f"Utils._fetch_profile failed, trying with 3 args: {e}")
+                    try:
+                        profile_data = await Utils._fetch_profile(summoner.summoner_id, region_str, params)
+                    except Exception:
+                        profile_data = None
             
             if not profile_data:
                 # Direct aiohttp fetch fallback
-                logging.info(f"Fetching rank info via aiohttp: {url}")
+                logger.info(f"Fetching rank info via aiohttp: {url}")
                 async with aiohttp.ClientSession() as session:
                     async with session.get(url, headers=self._headers) as resp:
-                        logging.info(f"Rank info response status: {resp.status}")
+                        logger.info(f"Rank info response status: {resp.status}")
                         if resp.status == 200:
                             data = await resp.json()
                             profile_data = data.get('data', {})
-                            # Log the keys we received to understand structure
-                            logging.info(f"Profile data keys: {list(profile_data.keys()) if isinstance(profile_data, dict) else 'not a dict'}")
+                            logger.info(f"Profile data keys: {list(profile_data.keys()) if isinstance(profile_data, dict) else 'not a dict'}")
 
             if not profile_data:
-                logging.warning(f"No profile_data found for summoner {summoner.summoner_id}")
+                logger.warning(f"No profile_data found for summoner {summoner.summoner_id}")
                 return "UNRANKED", "", 0, 0, 0
                 
             stats = profile_data.get('league_stats', [])
-            logging.info(f"Found {len(stats)} league_stats entries")
+            logger.info(f"Found {len(stats)} league_stats entries")
             
             for i, stat in enumerate(stats):
                 queue_info = stat.get('queue_info', {})
                 game_type = queue_info.get('game_type', '').upper()
-                logging.info(f"Stat {i}: game_type={game_type}")
+                logger.info(f"Stat {i}: game_type={game_type}")
                 
-                # Check for various Solo Queue identifiers
                 if game_type in ['SOLORANKED', 'RANKED_SOLO_5X5', 'SOLO']:
-                    # Try to find tier_info
-                    tier_info = stat.get('tier_info')
-                    if not tier_info:
-                        # Maybe it's flat in stat?
-                        tier_info = stat
-                    
-                    logging.info(f"tier_info keys: {list(tier_info.keys()) if isinstance(tier_info, dict) else tier_info}")
+                    tier_info = stat.get('tier_info') or stat
+                    logger.info(f"tier_info keys: {list(tier_info.keys()) if isinstance(tier_info, dict) else tier_info}")
                     
                     tier = tier_info.get('tier', 'UNRANKED').upper()
-                    # OPGG sometimes uses 'division' (int 1-4) or 'rank' (int 1-4 or Roman)
                     division = tier_info.get('division') or tier_info.get('rank') or ""
                     lp = tier_info.get('lp', 0)
                     wins = stat.get('win', 0)
                     losses = stat.get('lose', 0)
                     
-                    logging.info(f"Extracted: tier={tier}, division={division}, lp={lp}")
+                    logger.info(f"Extracted: tier={tier}, division={division}, lp={lp}")
                     return tier, self.division_to_roman(division), lp, wins, losses
             
-            logging.warning(f"No SOLORANKED stats found in league_stats")
+            logger.warning(f"No SOLORANKED stats found in league_stats")
             return "UNRANKED", "", 0, 0, 0
         except Exception as e:
-            logging.error(f"Error fetching rank info: {e}")
+            logger.error(f"Error fetching rank info: {e}", exc_info=True)
             return "UNRANKED", "", 0, 0, 0
 
     async def get_win_loss(self, summoner: Summoner):
@@ -202,6 +192,7 @@ class OPGGClient:
         div_str = str(division).upper()
         if div_str in ["I", "II", "III", "IV"]:
             return div_str
+        
         if div_str == "1": return "I"
         if div_str == "2": return "II"
         if div_str == "3": return "III"
@@ -210,13 +201,16 @@ class OPGGClient:
 
     async def get_tier_history(self, summoner_id: str, region: Region):
         region_str = region.value.lower() if hasattr(region, 'value') else str(region).lower()
-        url = f"https://lol-web-api.op.gg/api/v1.0/internal/bypass/summoners/{region_str}/{summoner_id}/tier-history"
+        # Use lol-api-summoner.op.gg as it's more reliable than lol-web-api.op.gg
+        url = f"https://lol-api-summoner.op.gg/api/{region_str}/summoners/{summoner_id}/tier-history"
         headers = self._headers
         try:
+            logger.info(f"Fetching tier history via aiohttp: {url}")
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, headers=headers) as response:
+                    logger.info(f"Tier history response status: {response.status}")
                     if response.status != 200:
-                        logging.error(f"Failed to fetch tier history: HTTP {response.status}")
+                        logger.error(f"Failed to fetch tier history: HTTP {response.status}")
                         return []
                     data = await response.json()
                     history_list = data.get('data', [])
@@ -250,7 +244,7 @@ class OPGGClient:
                         })
                     return results
         except Exception as e:
-            logging.error(f"Error in get_tier_history: {e}")
+            logger.error(f"Error in get_tier_history: {e}")
             return []
 
 # Global instance
