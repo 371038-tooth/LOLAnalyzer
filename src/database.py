@@ -121,6 +121,12 @@ class Database:
         async with self.pool.acquire() as conn:
             return await conn.fetch(query, discord_id) # Returns potentially multiple
 
+    async def get_user_by_riot_id(self, riot_id: str):
+        """Fetch a user by their Riot ID."""
+        query = "SELECT * FROM users WHERE riot_id = $1"
+        async with self.pool.acquire() as conn:
+            return await conn.fetchrow(query, riot_id)
+
     async def register_schedule(self, schedule_time, channel_id: int, created_by: int, period_days: int):
         # schedule_time might be string 'HH:MM' or 'HH:MM:SS'
         if isinstance(schedule_time, str):
