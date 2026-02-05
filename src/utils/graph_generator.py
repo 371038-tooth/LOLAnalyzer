@@ -114,33 +114,51 @@ def generate_rank_graph(rows: List[Dict[str, Any]], period_type: str, riot_id: s
 
     plt.xticks(rotation=45)
 
-    # Custom Y-axis labels (Tiers)
-    # We'll set labels at the middle of each tier (val 200, 600, 1000...)
-    y_ticks = []
-    y_labels = []
-    
-    # Determine the range of values to decide which ticks to show
+    # Determine Y-axis range and labels
     if values:
         min_v = min(values)
         max_v = max(values)
         
-        # Start from the tier below min_v
-        start_tier = (min_v // 400)
-        end_tier = (max_v // 400) + 1
+        # Round down to nearest 100 for bottom tick, up to nearest 100 for top tick
+        y_min = (min_v // 100) * 100
+        y_max = ((max_v // 100) + 1) * 100
         
-        for i in range(max(0, start_tier), min(len(TIER_ORDER), end_tier)):
-            y_ticks.append(i * 400 + 200)
-            y_labels.append(TIER_ORDER[i])
+        # Ensure at least 200 units (2 divisions) are shown if it's too tight, 
+        # unless it's the very top/bottom of the ladder.
+        if y_max - y_min < 200:
+            if y_max < len(TIER_ORDER) * 400:
+                y_max += 100
+            else:
+                y_min -= 100
 
-    ax.set_yticks(y_ticks)
-    ax.set_yticklabels(y_labels)
-    
+        ax.set_ylim(y_min, y_max)
+        
+        # Set ticks at every 100 LP (Division boundary)
+        y_ticks = list(range(int(y_min), int(y_max) + 1, 100))
+        y_labels = [numeric_to_rank(t) for t in y_ticks]
+        
+        ax.set_yticks(y_ticks)
+        ax.set_yticklabels(y_labels)
+
+    # Add LP annotations
+    for i, r in enumerate(rows):
+        val = values[i]
+        lp = r['lp']
+        d = dates[i]
+        ax.annotate(f"{lp}LP", (d, val), 
+                    textcoords="offset points", 
+                    xytext=(0, 10), 
+                    ha='center', 
+                    fontsize=9, 
+                    color='white',
+                    weight='bold')
+
     # Add Grid
-    plt.grid(True, linestyle='--', alpha=0.3, color='#95a5a6')
+    plt.grid(True, linestyle='--', alpha=0.2, color='#95a5a6')
 
     # Save to buffer
     buf = io.BytesIO()
-    plt.savefig(buf, format='png', bbox_inches='tight', transparent=False)
+    plt.savefig(buf, format='png', bbox_inches='tight', transparent=False, dpi=100)
     buf.seek(0)
     plt.close()
     
