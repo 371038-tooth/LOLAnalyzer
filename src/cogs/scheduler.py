@@ -26,13 +26,13 @@ class Scheduler(commands.Cog):
     async def reload_schedules(self):
         self.scheduler.remove_all_jobs()
         
-        # 1. System-wide Rank Collection Job (Daily 01:00)
-        # Records data for the previous day
+        # 1. System-wide Rank Collection Job (Daily 23:55)
+        # Records data for the current day
         self.scheduler.add_job(
             self.fetch_all_users_rank,
             'cron',
-            hour=1,
-            minute=0,
+            hour=23,
+            minute=55,
             second=0,
             name="daily_rank_fetch"
         )
@@ -229,10 +229,15 @@ class Scheduler(commands.Cog):
         await interaction.response.send_message(msg)
 
     @app_commands.command(name="fetch", description="指定したユーザーの現在のランク情報を取得してDBに登録します")
-    @app_commands.describe(riot_id="対象ユーザーのRiot ID (例: Name#Tag)")
+    @app_commands.describe(riot_id="対象ユーザーのRiot ID (例: Name#Tag) または 'all' で全ユーザー")
     async def fetch(self, interaction: discord.Interaction, riot_id: str):
         await interaction.response.defer()
         try:
+            if riot_id.lower() == "all":
+                results = await self.fetch_all_users_rank()
+                await interaction.followup.send(f"✅ 全ユーザーのランク情報を取得しました: 成功 {results['success']}, 失敗 {results['failed']} (合計 {results['total']})")
+                return
+
             # Find user in DB
             user = await db.get_user_by_riot_id(riot_id)
             if not user:
