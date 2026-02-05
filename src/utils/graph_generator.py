@@ -119,23 +119,24 @@ def generate_rank_graph(rows: List[Dict[str, Any]], period_type: str, riot_id: s
         min_v = min(values)
         max_v = max(values)
         
-        # Round down to nearest 100 for bottom tick, up to nearest 100 for top tick
+        # Tight range: start of the lowest rank to the end of the highest rank in data
         y_min = (min_v // 100) * 100
         y_max = ((max_v // 100) + 1) * 100
         
-        # Ensure at least 200 units (2 divisions) are shown if it's too tight, 
-        # unless it's the very top/bottom of the ladder.
-        if y_max - y_min < 200:
-            if y_max < len(TIER_ORDER) * 400:
-                y_max += 100
-            else:
-                y_min -= 100
-
         ax.set_ylim(y_min, y_max)
         
         # Set ticks at every 100 LP (Division boundary)
         y_ticks = list(range(int(y_min), int(y_max) + 1, 100))
-        y_labels = [numeric_to_rank(t) for t in y_ticks]
+        
+        # Custom labels: repeat the lower rank name at the top boundary if it's the same rank
+        y_labels = []
+        for i, t in enumerate(y_ticks):
+            if i == len(y_ticks) - 1 and len(y_ticks) > 1:
+                # For the very top tick, show the label for the rank just below it
+                # effectively labeling the "range" of that rank.
+                y_labels.append(numeric_to_rank(y_ticks[i-1]))
+            else:
+                y_labels.append(numeric_to_rank(t))
         
         ax.set_yticks(y_ticks)
         ax.set_yticklabels(y_labels)
