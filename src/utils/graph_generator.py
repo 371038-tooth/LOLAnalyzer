@@ -87,17 +87,17 @@ def generate_rank_graph(rows: List[Dict[str, Any]], period_type: str, riot_id: s
     # Title and Labels
     # Use Riot ID name part
     name = riot_id.split('#')[0]
-    plt.title(f"Rank History: {name} ({period_type})", fontsize=14, color='white', pad=20)
-    plt.xlabel("Date", fontsize=12, color='white')
-    plt.ylabel("Rank", fontsize=12, color='white')
+    plt.title(f"Rank History: {name} ({period_type})", fontsize=17, color='white', pad=25, weight='bold')
+    plt.xlabel("Date", fontsize=14, color='white', labelpad=10)
+    plt.ylabel("Rank", fontsize=14, color='white', labelpad=10)
 
     # Formatting Axes
     ax = plt.gca()
     ax.set_facecolor('#2c3e50')
     plt.gcf().set_facecolor('#34495e')
     
-    # Tick colors
-    ax.tick_params(colors='white')
+    # Tick colors and sizes
+    ax.tick_params(colors='white', labelsize=11)
     for spine in ax.spines.values():
         spine.set_color('#7f8c8d')
 
@@ -112,7 +112,7 @@ def generate_rank_graph(rows: List[Dict[str, Any]], period_type: str, riot_id: s
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y/%m'))
         ax.xaxis.set_major_locator(mdates.MonthLocator())
 
-    plt.xticks(rotation=45)
+    plt.xticks(rotation=45, fontsize=11)
 
     # Determine Y-axis range and labels
     if values:
@@ -139,7 +139,7 @@ def generate_rank_graph(rows: List[Dict[str, Any]], period_type: str, riot_id: s
                 y_labels.append(numeric_to_rank(t))
         
         ax.set_yticks(y_ticks)
-        ax.set_yticklabels(y_labels)
+        ax.set_yticklabels(y_labels, fontsize=11)
 
     # Add LP annotations
     for i, r in enumerate(rows):
@@ -148,9 +148,9 @@ def generate_rank_graph(rows: List[Dict[str, Any]], period_type: str, riot_id: s
         d = dates[i]
         ax.annotate(f"{lp}LP", (d, val), 
                     textcoords="offset points", 
-                    xytext=(0, 10), 
+                    xytext=(0, 12), 
                     ha='center', 
-                    fontsize=9, 
+                    fontsize=12, 
                     color='white',
                     weight='bold')
 
