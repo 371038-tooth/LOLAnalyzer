@@ -1,9 +1,13 @@
 
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+import matplotlib
 from datetime import datetime, date, timedelta
 import io
 import os
+
+# Set Japanese font for Windows
+matplotlib.rcParams['font.family'] = ['Meiryo', 'MS Gothic', 'Yu Gothic', 'sans-serif']
 from typing import List, Dict, Any
 
 # Rank Mapping
