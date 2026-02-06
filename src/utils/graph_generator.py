@@ -53,114 +53,115 @@ def numeric_to_rank(val: int) -> str:
     
     return f"{tier} {div}"
 
-def generate_rank_graph(rows: List[Dict[str, Any]], period_type: str, riot_id: str) -> io.BytesIO:
+def generate_rank_graph(user_data: Dict[str, List[Dict[str, Any]]], period_type: str, title_suffix: str = "") -> io.BytesIO:
     """
-    Generate a rank history graph.
-    rows: List of dicts with 'fetch_date', 'tier', 'rank', 'lp'
+    Generate a rank history graph for one or more users.
+    user_data: Dict mapping riot_id -> List of historical entries {'fetch_date', 'tier', 'rank', 'lp'}
     period_type: 'daily', 'weekly', 'monthly'
+    title_suffix: Optional suffix for the title
     """
-    if not rows:
+    if not user_data:
         return None
 
-    # Filter by year logic: If spanning years, start from Jan 1st of the current year
-    # Actually, the user says: "年を跨いだ場合は、必ず1月からのブラフを出すようにします。"
-    # I'll check if the earliest date year is different from the latest date year.
-    latest_date = max(r['fetch_date'] for r in rows)
-    earliest_date = min(r['fetch_date'] for r in rows)
-    
-    if earliest_date.year < latest_date.year:
-        # Start from Jan 1st of the latest year
-        start_filter = date(latest_date.year, 1, 1)
-        rows = [r for r in rows if r['fetch_date'] >= start_filter]
-        if not rows: # If no data in the newest year, just show the last available?
-            # User requirement says "must show from Jan", so maybe empty is fine or show the last year entirely.
-            # But usually it means "don't show the previous year part".
-            pass
-
-    dates = [r['fetch_date'] for r in rows]
-    values = [rank_to_numeric(r['tier'], r['rank'], r['lp']) for r in rows]
-
-    # Plotting
-    plt.figure(figsize=(10, 6))
-    plt.plot(dates, values, marker='o', linestyle='-', color='#1abc9c', linewidth=2, markersize=6)
-    
-    # Title and Labels
-    # Use Riot ID name part
-    name = riot_id.split('#')[0]
-    plt.title(f"Rank History: {name} ({period_type})", fontsize=17, color='white', pad=25, weight='bold')
-    plt.xlabel("Date", fontsize=14, color='white', labelpad=10)
-    plt.ylabel("Rank", fontsize=14, color='white', labelpad=10)
-
-    # Formatting Axes
+    plt.figure(figsize=(12, 7))
     ax = plt.gca()
     ax.set_facecolor('#2c3e50')
     plt.gcf().set_facecolor('#34495e')
+
+    # Color palette
+    colors = ['#1abc9c', '#3498db', '#9b59b6', '#f1c40f', '#e67e22', '#e74c3c', '#ecf0f1', '#95a5a6']
     
+    all_dates = []
+    all_values = []
+    
+    for i, (riot_id, rows) in enumerate(user_data.items()):
+        if not rows:
+            continue
+            
+        # Filter by year logic (consistent with previous requirement)
+        latest_date = max(r['fetch_date'] for r in rows)
+        earliest_date = min(r['fetch_date'] for r in rows)
+        if earliest_date.year < latest_date.year:
+            start_filter = date(latest_date.year, 1, 1)
+            rows = [r for r in rows if r['fetch_date'] >= start_filter]
+            if not rows: continue
+
+        dates = [r['fetch_date'] for r in rows]
+        values = [rank_to_numeric(r['tier'], r['rank'], r['lp']) for r in rows]
+        
+        all_dates.extend(dates)
+        all_values.extend(values)
+        
+        color = colors[i % len(colors)]
+        name = riot_id.split('#')[0]
+        
+        # Plot line
+        plt.plot(dates, values, marker='o', linestyle='-', color=color, linewidth=2, markersize=5, label=name)
+        
+        # Add LP annotations only for the latest point if multiple users, or all points if single user
+        if len(user_data) == 1:
+            for j, r in enumerate(rows):
+                ax.annotate(f"{r['lp']}LP", (dates[j], values[j]), 
+                            textcoords="offset points", xytext=(0, 10), ha='center', 
+                            fontsize=9, color='white', alpha=0.8)
+        else:
+            # Annotate only the last point for clarity in multi-user graphs
+            last_r = rows[-1]
+            ax.annotate(f"{name}: {last_r['lp']}LP", (dates[-1], values[-1]), 
+                        textcoords="offset points", xytext=(0, 10), ha='center', 
+                        fontsize=9, color=color, weight='bold')
+
+    # Title and Labels
+    title = f"Rank History{title_suffix} ({period_type})"
+    plt.title(title, fontsize=18, color='white', pad=25, weight='bold')
+    plt.xlabel("Date", fontsize=12, color='white', labelpad=10)
+    plt.ylabel("Rank", fontsize=12, color='white', labelpad=10)
+
     # Tick colors and sizes
-    ax.tick_params(colors='white', labelsize=11)
+    ax.tick_params(colors='white', labelsize=10)
     for spine in ax.spines.values():
         spine.set_color('#7f8c8d')
 
-    # Date Formatting on X-axis
+    # Date Formatting
     if period_type == 'daily':
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
         ax.xaxis.set_major_locator(mdates.DayLocator())
     elif period_type == 'weekly':
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
         ax.xaxis.set_major_locator(mdates.WeekdayLocator(byweekday=mdates.MO))
-    elif period_type == 'monthly':
+    else: # monthly
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y/%m'))
         ax.xaxis.set_major_locator(mdates.MonthLocator())
 
-    plt.xticks(rotation=45, fontsize=11)
+    plt.xticks(rotation=45)
 
-    # Determine Y-axis range and labels
-    if values:
-        min_v = min(values)
-        max_v = max(values)
-        
-        # Tight range: start of the lowest rank to the end of the highest rank in data
+    # Y-axis range and labels
+    if all_values:
+        min_v, max_v = min(all_values), max(all_values)
         y_min = (min_v // 100) * 100
         y_max = ((max_v // 100) + 1) * 100
-        
         ax.set_ylim(y_min, y_max)
         
-        # Set ticks at every 100 LP (Division boundary)
         y_ticks = list(range(int(y_min), int(y_max) + 1, 100))
-        
-        # Custom labels: repeat the lower rank name at the top boundary if it's the same rank
         y_labels = []
         for i, t in enumerate(y_ticks):
             if i == len(y_ticks) - 1 and len(y_ticks) > 1:
-                # For the very top tick, show the label for the rank just below it
-                # effectively labeling the "range" of that rank.
                 y_labels.append(numeric_to_rank(y_ticks[i-1]))
             else:
                 y_labels.append(numeric_to_rank(t))
-        
         ax.set_yticks(y_ticks)
-        ax.set_yticklabels(y_labels, fontsize=11)
+        ax.set_yticklabels(y_labels)
 
-    # Add LP annotations
-    for i, r in enumerate(rows):
-        val = values[i]
-        lp = r['lp']
-        d = dates[i]
-        ax.annotate(f"{lp}LP", (d, val), 
-                    textcoords="offset points", 
-                    xytext=(0, 12), 
-                    ha='center', 
-                    fontsize=12, 
-                    color='white',
-                    weight='bold')
+    # Legend
+    if len(user_data) > 1:
+        leg = plt.legend(loc='upper left', bbox_to_anchor=(1, 1), facecolor='#34495e', edgecolor='#7f8c8d')
+        for text in leg.get_texts():
+            text.set_color('white')
 
-    # Add Grid
-    plt.grid(True, linestyle='--', alpha=0.2, color='#95a5a6')
+    plt.grid(True, linestyle='--', alpha=0.1, color='#95a5a6')
 
-    # Save to buffer
     buf = io.BytesIO()
-    plt.savefig(buf, format='png', bbox_inches='tight', transparent=False, dpi=100)
+    plt.savefig(buf, format='png', bbox_inches='tight', transparent=False, dpi=110)
     buf.seek(0)
     plt.close()
-    
     return buf

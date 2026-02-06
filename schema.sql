@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS schedules (
     schedule_time TIME NOT NULL,
     channel_id BIGINT NOT NULL,
     period_days INTEGER DEFAULT 7,
+    status VARCHAR(50) DEFAULT 'ENABLED',
+    output_type VARCHAR(50) DEFAULT 'table',
     created_by BIGINT,
     reg_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     update_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP

@@ -44,13 +44,16 @@ class Scheduler(commands.Cog):
             channel_id = s['channel_id']
             period_days = s['period_days']
             
+            if s['status'] != 'ENABLED':
+                continue
+
             self.scheduler.add_job(
                 self.run_daily_report,
                 'cron',
                 hour=sched_time.hour,
                 minute=sched_time.minute,
                 second=sched_time.second,
-                args=[channel_id, period_days]
+                args=[channel_id, period_days, s['output_type']]
             )
         print(f"Loaded {len(schedules)} reporting schedules and set Fetch Job at 01:00.")
 
@@ -68,6 +71,33 @@ class Scheduler(commands.Cog):
             await interaction.followup.send("不正な期間です。`daily`, `weekly`, `monthly` のいずれかを指定してください。", ephemeral=True)
             return
 
+        # "all" support
+        if riot_id.lower() == "all":
+            users = await db.get_all_users()
+            if not users:
+                await interaction.followup.send("登録されているユーザーがいません。")
+                return
+            
+            user_data = {}
+            for u in users:
+                rows = await db.get_rank_history_for_graph(u['discord_id'], u['riot_id'], start_date)
+                if rows:
+                    user_data[u['riot_id']] = [dict(r) for r in rows]
+            
+            if not user_data:
+                await interaction.followup.send("表示するデータがありません。")
+                return
+                
+            buf = generate_rank_graph(user_data, period, " (全員)")
+            if not buf:
+                await interaction.followup.send("グラフの生成に失敗しました。")
+                return
+            
+            file = discord.File(fp=buf, filename="all_rank_graph.png")
+            await interaction.followup.send(f"**全員** のランク推移 ({period})", file=file)
+            return
+
+        # Single user logic
         # Find user in DB
         user = await db.get_user_by_riot_id(riot_id)
         if not user:
@@ -76,15 +106,8 @@ class Scheduler(commands.Cog):
 
         discord_id = user['discord_id']
         
-        # Calculate start date
-        today_date = date.today()
-        if period == "daily":
-            start_date = today_date - timedelta(days=7)
-        elif period == "weekly":
-            start_date = today_date - timedelta(days=60)
-        else: # monthly
-            start_date = today_date - timedelta(days=180)
-
+        # Calculate start date (reuse logic above if needed, but start_date is already calculated)
+        
         # Force fetch if requested
         if force_fetch:
             try:
@@ -112,11 +135,8 @@ class Scheduler(commands.Cog):
             return
 
         # Generate Graph
-        # rows are asyncpg Record objects, convert to dict if needed? 
-        # graph_generator expects Dict with keys
         row_dicts = [dict(r) for r in rows]
-        
-        buf = generate_rank_graph(row_dicts, period, riot_id)
+        buf = generate_rank_graph({riot_id: row_dicts}, period, f": {riot_id.split('#')[0]}")
         if not buf:
             await interaction.followup.send("グラフの生成に失敗しました。")
             return
@@ -139,13 +159,14 @@ class Scheduler(commands.Cog):
             # s['schedule_time'] might be time object
             t = s['schedule_time']
             t_str = t.strftime("%H:%M") if hasattr(t, 'strftime') else str(t)
-            msg += f"ID: {s['id']} | 時間: {t_str} | Ch: {s['channel_id']} | 期間: {s['period_days']}日\n"
+            status_emoji = "✅" if s['status'] == 'ENABLED' else "❌"
+            msg += f"{status_emoji} ID: {s['id']} | 時間: {t_str} | Ch: {s['channel_id']} | 期間: {s['period_days']}日 | 形式: {s['output_type']}\n"
         
         await interaction.response.send_message(msg)
 
     @schedule_group.command(name="add", description="スケジュールを登録します")
     async def schedule_add(self, interaction: discord.Interaction):
-        await interaction.response.send_message("登録するスケジュールを入力してください。\n形式: `時間(HH:MM) チャンネル(ID or here) 期間(日数)`\n例: `21:00 here 7`")
+        await interaction.response.send_message("登録するスケジュールを入力してください。\n形式: `時間(HH:MM) チャンネル(ID/here) 期間(日) 出力形式(table/graph)`\n例: `21:00 here 7 graph`")
 
         def check(m):
             return m.author.id == interaction.user.id and m.channel.id == interaction.channel.id
@@ -156,15 +177,15 @@ class Scheduler(commands.Cog):
             await interaction.followup.send("タイムアウトしました。")
             return
 
-        time_str, channel_id, period_days, error = self.parse_schedule_input(msg.content, interaction.channel.id)
+        time_str, channel_id, period_days, output_type, error = self.parse_schedule_input(msg.content, interaction.channel.id)
         if error:
             await interaction.followup.send(error)
             return
 
         try:
-            await db.register_schedule(time_str, channel_id, interaction.user.id, period_days)
+            await db.register_schedule(time_str, channel_id, interaction.user.id, period_days, output_type)
             await self.reload_schedules()
-            await interaction.followup.send(f"スケジュール登録完了: {time_str} にチャンネル {channel_id} へ通知 ({period_days}日分)")
+            await interaction.followup.send(f"スケジュール登録完了: {time_str} にチャンネル {channel_id} へ通知 ({period_days}日分, 形式: {output_type})")
         except Exception as e:
             await interaction.followup.send(f"エラーが発生しました: {e}")
 
@@ -182,6 +203,26 @@ class Scheduler(commands.Cog):
         except Exception as e:
             await interaction.response.send_message(f"エラーが発生しました: {e}", ephemeral=True)
 
+    @schedule_group.command(name="enable", description="スケジュールを有効にします")
+    async def schedule_enable(self, interaction: discord.Interaction, schedule_id: int):
+        s = await db.get_schedule_by_id(schedule_id)
+        if not s:
+            await interaction.response.send_message(f"スケジュールID {schedule_id} は存在しません。", ephemeral=True)
+            return
+        await db.set_schedule_status(schedule_id, 'ENABLED')
+        await self.reload_schedules()
+        await interaction.response.send_message(f"スケジュールID {schedule_id} を有効にしました。")
+
+    @schedule_group.command(name="disable", description="スケジュールを無効にします")
+    async def schedule_disable(self, interaction: discord.Interaction, schedule_id: int):
+        s = await db.get_schedule_by_id(schedule_id)
+        if not s:
+            await interaction.response.send_message(f"スケジュールID {schedule_id} は存在しません。", ephemeral=True)
+            return
+        await db.set_schedule_status(schedule_id, 'DISABLED')
+        await self.reload_schedules()
+        await interaction.response.send_message(f"スケジュールID {schedule_id} を無効にしました。")
+
     @schedule_group.command(name="edit", description="スケジュールIDを指定してスケジュールを変更します")
     async def schedule_edit(self, interaction: discord.Interaction, schedule_id: int):
         s = await db.get_schedule_by_id(schedule_id)
@@ -190,7 +231,7 @@ class Scheduler(commands.Cog):
             return
 
         current_time = s['schedule_time'].strftime("%H:%M") if hasattr(s['schedule_time'], 'strftime') else str(s['schedule_time'])
-        await interaction.response.send_message(f"変更内容を入力してください (ID: {schedule_id})\n現在の設定: `{current_time} {s['channel_id']} {s['period_days']}`\n形式: `時間 チャンネル 期間` (例: `22:00 here 7`)")
+        await interaction.response.send_message(f"変更内容を入力してください (ID: {schedule_id})\n現在の設定: `{current_time} {s['channel_id']} {s['period_days']} {s['output_type']}`\n形式: `時間 チャンネル 期間 形式` (例: `22:00 here 7 graph`)")
 
         def check(m):
             return m.author.id == interaction.user.id and m.channel.id == interaction.channel.id
@@ -201,13 +242,13 @@ class Scheduler(commands.Cog):
             await interaction.followup.send("タイムアウトしました。")
             return
 
-        time_str, channel_id, period_days, error = self.parse_schedule_input(msg.content, interaction.channel.id)
+        time_str, channel_id, period_days, output_type, error = self.parse_schedule_input(msg.content, interaction.channel.id)
         if error:
             await interaction.followup.send(error)
             return
 
         try:
-            await db.update_schedule(schedule_id, time_str, channel_id, period_days)
+            await db.update_schedule(schedule_id, time_str, channel_id, period_days, output_type)
             await self.reload_schedules()
             await interaction.followup.send(f"スケジュールID {schedule_id} を更新しました。")
         except Exception as e:
@@ -218,13 +259,19 @@ class Scheduler(commands.Cog):
         msg = """
 **schedule コマンドの使い方**
 `/schedule show` : 現在登録されているスケジュールの一覧を表示します。
-`/schedule add` : 新しいスケジュールを登録します。対話形式で `時間 チャンネル 期間` を入力します。
-`/schedule del schedule_id` : 指定したIDのスケジュールを削除します。
+`/schedule add` : 新しいスケジュールを登録します。対話形式で `時間 チャンネル 期間 形式` を入力します。
 `/schedule edit schedule_id` : 指定したIDのスケジュールを変更します。
+`/schedule enable schedule_id` : スケジュールを有効化します。
+`/schedule disable schedule_id` : スケジュールを無効化します。
+`/schedule del schedule_id` : 指定したIDのスケジュールを削除します。
+
+**形式について**
+`table`: 見やすい表形式で出力
+`graph`: 登録ユーザー全員の推移を1つのグラフで出力
 
 **入力形式の例**
-`21:00 here 7` : 毎日21時に、このチャンネルに、過去7日間のレポートを表示
-`09:30 1234567890 3` : 毎日9:30に、チャンネルID 1234567890 に、過去3日間のレポートを表示
+`21:00 here 7 table` : 毎日21時に、このチャンネルに、過去7日間のレポートを表で表示
+`09:30 1234567890 3 graph` : 毎日9:30に、チャンネルID 1234567890 に、過去3日間のレポートをグラフで表示
 """
         await interaction.response.send_message(msg)
 
@@ -286,25 +333,18 @@ class Scheduler(commands.Cog):
             await interaction.followup.send(f"集計出力中にエラーが発生しました: {e}")
 
     def parse_schedule_input(self, text: str, current_channel_id: int):
-        # Normalize spaces
         parts = text.strip().split()
-        if len(parts) < 3:
-            return None, None, None, "入力形式が正しくありません。`時間 チャンネル 期間` の順で入力してください。(例: 21:00 here 7)"
-
-        # Simple heuristic parsing (Expect Time Channel Period order, but try to be flexible if distinct)
-        # Time usually has ':'
-        # Channel is 'here' or long digits
-        # Period is small digits
-
-        # Let's try strict order first as per example instructions, but example was `21:00 here 7`
+        if len(parts) < 4:
+            return None, None, None, None, "入力形式が正しくありません。`時間 チャンネル 期間 形式` の順で入力してください。(例: 21:00 here 7 graph)"
         
         t_str = parts[0]
         c_str = parts[1]
         p_str = parts[2]
+        o_str = parts[3].lower()
 
         # Validate Time
         if ':' not in t_str:
-             return None, None, None, "時間の形式が正しくありません (例: 21:00)"
+             return None, None, None, None, "時間の形式が正しくありません (例: 21:00)"
         
         # Validate Channel
         channel_id = None
@@ -313,14 +353,18 @@ class Scheduler(commands.Cog):
         elif c_str.isdigit():
             channel_id = int(c_str)
         else:
-             return None, None, None, "チャンネル指定が正しくありません ('here' または ID)"
+             return None, None, None, None, "チャンネル指定が正しくありません ('here' または ID)"
 
         # Validate Period
         if not p_str.isdigit():
-             return None, None, None, "期間（日数）は数値で入力してください"
+             return None, None, None, None, "期間（日数）は数値で入力してください"
         period_days = int(p_str)
 
-        return t_str, channel_id, period_days, None
+        # Validate Output Type
+        if o_str not in ['table', 'graph']:
+            return None, None, None, None, "出力形式は `table` または `graph` を指定してください"
+
+        return t_str, channel_id, period_days, o_str, None
 
     async def fetch_all_users_rank(self, backfill: bool = False):
         """Fetch current rank and optionally backfill history."""
@@ -365,8 +409,8 @@ class Scheduler(commands.Cog):
         logger.info(f"Global rank collection completed: {results}")
         return results
 
-    async def run_daily_report(self, channel_id: int, period_days: int):
-        print(f"Running report for channel {channel_id}")
+    async def run_daily_report(self, channel_id: int, period_days: int, output_type: str = 'table'):
+        print(f"Running report for channel {channel_id} (type: {output_type})")
         channel = self.bot.get_channel(channel_id)
         if not channel:
             print(f"Channel {channel_id} not found.")
@@ -379,21 +423,39 @@ class Scheduler(commands.Cog):
 
         today = date.today()
         
-        # Generate Report (fetch_and_save_rank removed from here)
         try:
-            report = await self.generate_report_table(users, today, period_days)
-            if len(report) > 1990:
-                chunks = [report[i:i+1900] for i in range(0, len(report), 1900)]
-                for chunk in chunks:
-                    await channel.send(f"```{chunk}```")
+            if output_type == 'graph':
+                # Generate multi-user graph
+                start_date = today - timedelta(days=period_days)
+                user_data = {}
+                for u in users:
+                    rows = await db.get_rank_history_for_graph(u['discord_id'], u['riot_id'], start_date)
+                    if rows:
+                        user_data[u['riot_id']] = [dict(r) for r in rows]
+                
+                if not user_data:
+                    await channel.send(f"過去 {period_days} 日間のグラフデータがありません。")
+                    return
+
+                buf = generate_rank_graph(user_data, "daily" if period_days <= 14 else "weekly", " (全員・定期)")
+                if buf:
+                    file = discord.File(fp=buf, filename="scheduled_graph.png")
+                    await channel.send(content=f"**定期レポート (過去{period_days}日間)**", file=file)
+                else:
+                    await channel.send("グラフの生成に失敗しました。")
             else:
-                await channel.send(f"```{report}```")
+                # Table output
+                report = await self.generate_report_table(users, today, period_days)
+                if len(report) > 1990:
+                    chunks = [report[i:i+1900] for i in range(0, len(report), 1900)]
+                    for chunk in chunks:
+                        await channel.send(f"```{chunk}```")
+                else:
+                    await channel.send(f"```{report}```")
 
         except Exception as e:
             await channel.send(f"レポート生成中にエラーが発生しました: {e}")
-            print(e)
-            import traceback
-            traceback.print_exc()
+            logger.error(f"Error in scheduled report: {e}", exc_info=True)
 
     async def fetch_and_save_rank(self, user, target_date=None):
         if target_date is None:

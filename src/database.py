@@ -87,14 +87,11 @@ class Database:
                         await conn.execute("ALTER TABLE rank_history ADD COLUMN IF NOT EXISTS losses INTEGER DEFAULT 0")
                         await conn.execute("ALTER TABLE rank_history ADD COLUMN IF NOT EXISTS games INTEGER DEFAULT 0")
                         
-                        # Migration for unique constraint on rank_history
-                        try:
-                            await conn.execute("ALTER TABLE rank_history ADD CONSTRAINT rank_history_unique_entry UNIQUE (discord_id, riot_id, fetch_date)")
-                        except Exception:
-                            # Already exists or duplicates exist
-                            pass
+                        # Migration for schedules
+                        await conn.execute("ALTER TABLE schedules ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'ENABLED'")
+                        await conn.execute("ALTER TABLE schedules ADD COLUMN IF NOT EXISTS output_type VARCHAR(50) DEFAULT 'table'")
                         
-                        print("Schema migration checked/applied (Composite Key).")
+                        print("Schema migration checked/applied (Composite Key & Schedules).")
                     except Exception as e:
                         print(f"Migration warning: {e}")
 
@@ -127,7 +124,7 @@ class Database:
         async with self.pool.acquire() as conn:
             return await conn.fetchrow(query, riot_id)
 
-    async def register_schedule(self, schedule_time, channel_id: int, created_by: int, period_days: int):
+    async def register_schedule(self, schedule_time, channel_id: int, created_by: int, period_days: int, output_type: str = 'table'):
         # schedule_time might be string 'HH:MM' or 'HH:MM:SS'
         if isinstance(schedule_time, str):
             # Try to parse HH:MM or HH:MM:SS
@@ -141,12 +138,12 @@ class Database:
                 raise ValueError(f"Invalid time format: {schedule_time}") from e
 
         query = """
-        INSERT INTO schedules (schedule_time, channel_id, created_by, period_days, update_date)
-        VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+        INSERT INTO schedules (schedule_time, channel_id, created_by, period_days, output_type, status, update_date)
+        VALUES ($1, $2, $3, $4, $5, 'ENABLED', CURRENT_TIMESTAMP)
         RETURNING id
         """
         async with self.pool.acquire() as conn:
-            return await conn.fetchval(query, schedule_time, channel_id, created_by, period_days)
+            return await conn.fetchval(query, schedule_time, channel_id, created_by, period_days, output_type)
 
     async def get_all_schedules(self):
         query = "SELECT * FROM schedules"
@@ -197,7 +194,7 @@ class Database:
         async with self.pool.acquire() as conn:
             await conn.execute(query, schedule_id)
 
-    async def update_schedule(self, schedule_id: int, schedule_time, channel_id: int, period_days: int):
+    async def update_schedule(self, schedule_id: int, schedule_time, channel_id: int, period_days: int, output_type: str = 'table'):
         if isinstance(schedule_time, str):
             try:
                 if len(schedule_time.split(':')) == 2:
@@ -210,11 +207,20 @@ class Database:
 
         query = """
         UPDATE schedules 
-        SET schedule_time = $2, channel_id = $3, period_days = $4, update_date = CURRENT_TIMESTAMP
+        SET schedule_time = $2, channel_id = $3, period_days = $4, output_type = $5, update_date = CURRENT_TIMESTAMP
         WHERE id = $1
         """
         async with self.pool.acquire() as conn:
-            await conn.execute(query, schedule_id, schedule_time, channel_id, period_days)
+            await conn.execute(query, schedule_id, schedule_time, channel_id, period_days, output_type)
+
+    async def set_schedule_status(self, schedule_id: int, status: str):
+        query = """
+        UPDATE schedules 
+        SET status = $2, update_date = CURRENT_TIMESTAMP
+        WHERE id = $1
+        """
+        async with self.pool.acquire() as conn:
+            await conn.execute(query, schedule_id, status)
 
     async def get_schedule_by_id(self, schedule_id: int):
         query = "SELECT * FROM schedules WHERE id = $1"
