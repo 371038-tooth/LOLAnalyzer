@@ -151,12 +151,9 @@ def generate_rank_graph(user_data: Dict[str, List[Dict[str, Any]]], period_type:
     # Y-axis range and labels
     if all_values:
         min_v, max_v = min(all_values), max(all_values)
-        # Add +/- 1 division (100) padding for better visibility
-        y_min = (min_v // 100 - 1) * 100
+        # Use division-based limits without extra padding
+        y_min = (min_v // 100) * 100
         y_max = (max_v // 100 + 1) * 100
-        
-        # Ensure y_min is not too low (at least IRON IV)
-        y_min = max(0, y_min)
         
         ax.set_ylim(y_min, y_max)
         
