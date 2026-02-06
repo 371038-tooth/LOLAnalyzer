@@ -93,7 +93,7 @@ class Scheduler(commands.Cog):
                 await interaction.followup.send("表示するデータがありません。")
                 return
                 
-            buf = generate_rank_graph(user_data, period, " (全員)")
+            buf = generate_rank_graph(user_data, period, " (All Users)")
             if not buf:
                 await interaction.followup.send("グラフの生成に失敗しました。")
                 return
@@ -440,7 +440,7 @@ class Scheduler(commands.Cog):
                     await channel.send(f"過去 {period_days} 日間のグラフデータがありません。")
                     return
 
-                buf = generate_rank_graph(user_data, "daily" if period_days <= 14 else "weekly", " (全員・定期)")
+                buf = generate_rank_graph(user_data, "daily" if period_days <= 14 else "weekly", " (All - Scheduled)")
                 if buf:
                     file = discord.File(fp=buf, filename="scheduled_graph.png")
                     await channel.send(content=f"**定期レポート (過去{period_days}日間)**", file=file)
