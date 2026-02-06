@@ -7,7 +7,16 @@ import io
 import os
 
 # Set Japanese font for Windows and Linux (Railway)
-matplotlib.rcParams['font.family'] = ['Noto Sans CJK JP', 'Meiryo', 'MS Gothic', 'Yu Gothic', 'sans-serif']
+# Use local font file for better portability
+font_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'assets', 'fonts', 'JapaneseFont.otf')
+if os.path.exists(font_path):
+    from matplotlib import font_manager
+    font_manager.fontManager.addfont(font_path)
+    prop = font_manager.FontProperties(fname=font_path)
+    matplotlib.rcParams['font.family'] = prop.get_name()
+else:
+    # Fallback
+    matplotlib.rcParams['font.family'] = ['Meiryo', 'MS Gothic', 'Yu Gothic', 'sans-serif']
 from typing import List, Dict, Any
 
 # Rank Mapping
