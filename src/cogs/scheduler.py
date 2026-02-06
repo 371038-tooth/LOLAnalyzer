@@ -6,7 +6,7 @@ from src.database import db
 from src.utils import rank_calculator
 from src.utils.opgg_client import opgg_client
 from src.utils.opgg_compat import Region, OPGG, IS_V2
-from src.utils.graph_generator import generate_rank_graph
+from src.utils.graph_generator import generate_rank_graph, generate_report_image
 from datetime import datetime, date, timedelta
 import asyncio
 import io
@@ -313,24 +313,38 @@ class Scheduler(commands.Cog):
             await interaction.followup.send(f"実行中にエラーが発生しました: {e}")
 
     @app_commands.command(name="report", description="指定した日数の集計結果を表示します")
-    @app_commands.describe(days="集計期間 (日数、デフォルト: 7)")
-    async def report(self, interaction: discord.Interaction, days: int = 7):
-        await interaction.response.send_message(f"過去 {days} 日間の集計結果を出力します...")
+    @app_commands.describe(
+        days="集計期間 (日数、デフォルト: 7)",
+        riot_id="特定のユーザーのみを表示する場合に指定 (例: Name#Tag)"
+    )
+    async def report(self, interaction: discord.Interaction, days: int = 7, riot_id: str = None):
+        await interaction.response.defer()
         try:
-            users = await db.get_all_users()
-            if not users:
-                await interaction.followup.send("登録されているユーザーがいません。`/user add` で登録してください。")
-                return
-
-            today = date.today()
-            report = await self.generate_report_table(users, today, days)
-            
-            if len(report) > 1990:
-                chunks = [report[i:i+1900] for i in range(0, len(report), 1900)]
-                for chunk in chunks:
-                    await interaction.followup.send(f"```{chunk}```")
+            if riot_id:
+                # Individual report (Text)
+                user = await db.get_user_by_riot_id(riot_id)
+                if not user:
+                    await interaction.followup.send(f"ユーザー `{riot_id}` は登録されていません。")
+                    return
+                
+                today = date.today()
+                report_text = await self.generate_single_user_report(user, today, days)
+                await interaction.followup.send(report_text)
             else:
-                await interaction.followup.send(f"```{report}```")
+                # All users report (Image)
+                users = await db.get_all_users()
+                if not users:
+                    await interaction.followup.send("登録されているユーザーがいません。")
+                    return
+
+                today = date.today()
+                buf = await self.generate_report_image_payload(users, today, days)
+                
+                if buf:
+                    file = discord.File(fp=buf, filename="report.png")
+                    await interaction.followup.send(f"**過去 {days} 日間の集計結果**", file=file)
+                else:
+                    await interaction.followup.send("レポートの生成に失敗しました。")
         except Exception as e:
             logger.error(f"Error in report command: {e}", exc_info=True)
             await interaction.followup.send(f"集計出力中にエラーが発生しました: {e}")
@@ -632,6 +646,116 @@ class Scheduler(commands.Cog):
             lines.append("| " + " | ".join([pad_string(c, col_widths[i]) for i, c in enumerate(row)]) + " |")
             
         return "\n".join(lines)
+
+    async def generate_single_user_report(self, user, today: date, period_days: int) -> str:
+        """Generate vertical text report for a single user."""
+        start_date = today - timedelta(days=period_days)
+        uid = user['discord_id']
+        rid = user['riot_id']
+        history = await db.get_rank_history(uid, rid, start_date, today)
+        
+        if not history:
+            return f"**{rid}** の過去 {period_days} 日間のデータが見つかりませんでした。"
+
+        lines = [f"**{rid}** のレポート (過去 {period_days} 日間)", "```"]
+        lines.append("日付  | ランク          | 前日比 | 戦績")
+        lines.append("------|-----------------|--------|---------------")
+        
+        # Sort history descending (latest first)
+        history.sort(key=lambda x: x['fetch_date'], reverse=True)
+        
+        for i, h in enumerate(history):
+            d_str = h['fetch_date'].strftime("%m/%d")
+            r_str = rank_calculator.format_rank_display(h['tier'], h['rank'], h['lp'])
+            
+            diff_str = "-"
+            record_str = "-"
+            
+            # Record calculation
+            # We need the previous entry for diff and win/loss
+            # Since history is sorted by date, next item in the list is the previous day
+            if i + 1 < len(history):
+                prev_h = history[i+1]
+                # Diff
+                diff_str = rank_calculator.calculate_diff_text(prev_h, h, include_prefix=False)
+                # Record
+                w = h['wins'] - prev_h['wins']
+                l = h['losses'] - prev_h['losses']
+                g = w + l
+                if g > 0:
+                    rate = int((w / g) * 100)
+                    record_str = f"{g}戦{w}勝({rate}%)"
+            
+            # Padding for alignment
+            lines.append(f"{d_str:5} | {r_str:15} | {diff_str:6} | {record_str}")
+        
+        lines.append("```")
+        return "\n".join(lines)
+
+    async def generate_report_image_payload(self, users, today: date, period_days: int) -> io.BytesIO:
+        """Generate table image for all users."""
+        start_date = today - timedelta(days=period_days)
+        data_map = {}
+        all_dates = set()
+        
+        for user in users:
+            history = await db.get_rank_history(user['discord_id'], user['riot_id'], start_date, today)
+            user_history = {h['fetch_date']: h for h in history}
+            data_map[user['riot_id']] = user_history
+            all_dates.update(user_history.keys())
+            
+        sorted_dates = sorted(list(all_dates))
+        if not sorted_dates:
+            return None
+
+        # Headers: Riot ID, Recent Dates, Daily Diff, Period Diff, Total Record
+        # Limit dates shown in image to avoid too wide image if period is long
+        MAX_DATES_IN_IMAGE = 5
+        shown_dates = sorted_dates[-MAX_DATES_IN_IMAGE:]
+        
+        headers = ["RIOT ID"] + [d.strftime("%m/%d") for d in shown_dates] + ["前日比", f"{period_days}日比", "戦績"]
+        
+        table_data = []
+        for rid, h_map in data_map.items():
+            row = [rid.split('#')[0]] # Show only name to save space
+            
+            # Rank for each date
+            for d in shown_dates:
+                entry = h_map.get(d)
+                row.append(rank_calculator.format_rank_display(entry['tier'], entry['rank'], entry['lp']) if entry else "-")
+            
+            # Diff logic
+            anchor_date = sorted_dates[-1]
+            anchor_entry = h_map.get(anchor_date)
+            
+            # Daily Diff
+            prev_entry = h_map.get(anchor_date - timedelta(days=1))
+            daily_diff = "-"
+            if prev_entry and anchor_entry:
+                daily_diff = rank_calculator.calculate_diff_text(prev_entry, anchor_entry, include_prefix=False)
+            row.append(daily_diff)
+            
+            # Period Diff
+            start_entry = h_map.get(sorted_dates[0])
+            period_diff = "-"
+            if start_entry and anchor_entry:
+                period_diff = rank_calculator.calculate_diff_text(start_entry, anchor_entry, include_prefix=False)
+            row.append(period_diff)
+            
+            # Record (Total for period)
+            record = "-"
+            if start_entry and anchor_entry:
+                w = anchor_entry['wins'] - start_entry['wins']
+                l = anchor_entry['losses'] - start_entry['losses']
+                g = w + l
+                if g > 0:
+                    record = f"{g}戦{w}勝"
+            row.append(record)
+            
+            table_data.append(row)
+
+        from src.utils.graph_generator import generate_report_image
+        return generate_report_image(headers, table_data, f"Rank Report (Last {period_days} Days)")
 
 async def setup(bot):
     await bot.add_cog(Scheduler(bot))

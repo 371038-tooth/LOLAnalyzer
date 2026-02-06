@@ -176,3 +176,59 @@ def generate_rank_graph(user_data: Dict[str, List[Dict[str, Any]]], period_type:
     buf.seek(0)
     plt.close()
     return buf
+
+def generate_report_image(headers: List[str], data: List[List[Any]], title: str) -> io.BytesIO:
+    """
+    Generate a clean table image using matplotlib.
+    """
+    if not data:
+        return None
+
+    # Calculate figure height based on number of rows
+    row_height = 0.5
+    header_height = 0.6
+    fig_height = header_height + (len(data) * row_height) + 1.0
+    
+    # Calculate column widths (simple estimate)
+    # Riot ID column is usually longest
+    fig, ax = plt.subplots(figsize=(12, max(4, fig_height)))
+    ax.axis('off')
+    plt.gcf().set_facecolor('#34495e')
+
+    # Color configuration
+    header_color = '#2c3e50'
+    row_colors = ['#34495e', '#2c3e50']
+    text_color = 'white'
+
+    # Create table
+    table = ax.table(
+        cellText=data,
+        colLabels=headers,
+        loc='center',
+        cellLoc='center',
+        colColours=[header_color] * len(headers)
+    )
+
+    # Style table
+    table.auto_set_font_size(False)
+    table.set_fontsize(11)
+    table.scale(1.2, 2.5) # Scale for readability
+
+    for (row, col), cell in table.get_celld().items():
+        cell.set_edgecolor('#7f8c8d')
+        if row == 0:
+            cell.set_text_props(weight='bold', color=text_color)
+        else:
+            cell.set_facecolor(row_colors[row % len(row_colors)])
+            cell.set_text_props(color=text_color)
+            # Make Riot ID (column 0) left-aligned for better readability
+            if col == 0:
+                cell.get_text().set_horizontalalignment('left')
+
+    plt.title(title, fontsize=18, color=text_color, pad=30, weight='bold')
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', bbox_inches='tight', transparent=False, dpi=120, facecolor='#34495e')
+    buf.seek(0)
+    plt.close()
+    return buf
