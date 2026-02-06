@@ -177,7 +177,7 @@ def generate_rank_graph(user_data: Dict[str, List[Dict[str, Any]]], period_type:
     plt.close()
     return buf
 
-def generate_report_image(headers: List[str], data: List[List[Any]], title: str) -> io.BytesIO:
+def generate_report_image(headers: List[str], data: List[List[Any]], title: str, col_widths: List[float] = None) -> io.BytesIO:
     """
     Generate a clean table image using matplotlib.
     """
@@ -191,7 +191,7 @@ def generate_report_image(headers: List[str], data: List[List[Any]], title: str)
     
     # Calculate column widths (simple estimate)
     # Riot ID column is usually longest
-    fig, ax = plt.subplots(figsize=(12, max(4, fig_height)))
+    fig, ax = plt.subplots(figsize=(14, max(4, fig_height)))
     ax.axis('off')
     plt.gcf().set_facecolor('#34495e')
 
@@ -201,18 +201,23 @@ def generate_report_image(headers: List[str], data: List[List[Any]], title: str)
     text_color = 'white'
 
     # Create table
+    # We estimate column widths based on headers and generic needs if not provided
+    if col_widths is None:
+        col_widths = [0.15] + [0.08] * (len(headers) - 4) + [0.22, 0.22, 0.1]
+    
     table = ax.table(
         cellText=data,
         colLabels=headers,
         loc='center',
         cellLoc='center',
-        colColours=[header_color] * len(headers)
+        colColours=[header_color] * len(headers),
+        colWidths=col_widths
     )
 
     # Style table
     table.auto_set_font_size(False)
     table.set_fontsize(11)
-    table.scale(1.2, 2.5) # Scale for readability
+    table.scale(1.0, 2.5) # Scale height for readability
 
     for (row, col), cell in table.get_celld().items():
         cell.set_edgecolor('#7f8c8d')
@@ -224,6 +229,8 @@ def generate_report_image(headers: List[str], data: List[List[Any]], title: str)
             # Make Riot ID (column 0) left-aligned for better readability
             if col == 0:
                 cell.get_text().set_horizontalalignment('left')
+                # Add a small offset for padding
+                cell.get_text().set_position((0.05, 0.5))
 
     plt.title(title, fontsize=18, color=text_color, pad=30, weight='bold')
 

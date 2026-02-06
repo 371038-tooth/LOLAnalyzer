@@ -606,16 +606,14 @@ class Scheduler(commands.Cog):
             
             vals.append(row)
 
-        # Build Table String manually for alignment
         import unicodedata
         def get_display_width(s):
-            """Calculate display width considering full-width characters."""
+            """Calculate display width considering full-width and ambiguous characters."""
             width = 0
             for char in str(s):
                 eaw = unicodedata.east_asian_width(char)
-                # 'W' (Wide) and 'F' (Fullwidth) are 2 cells
-                # 'A' (Ambiguous) symbols like ± or ⇒ are usually 1 cell in Discord code blocks
-                if eaw in ('W', 'F'):
+                # 'W' (Wide), 'F' (Fullwidth), and 'A' (Ambiguous) are usually 2 cells in Japanese environments
+                if eaw in ('W', 'F', 'A'):
                     width += 2
                 else:
                     width += 1
@@ -657,37 +655,60 @@ class Scheduler(commands.Cog):
         if not history:
             return f"**{rid}** の過去 {period_days} 日間のデータが見つかりませんでした。"
 
+        # Use helper for display width
+        import unicodedata
+        def get_display_width(s):
+            """Calculate display width considering full-width and ambiguous characters."""
+            width = 0
+            for char in str(s):
+                eaw = unicodedata.east_asian_width(char)
+                if eaw in ('W', 'F', 'A'):
+                    width += 2
+                else:
+                    width += 1
+            return width
+
+        def pad_string(s, width):
+            s_str = str(s)
+            current_w = get_display_width(s_str)
+            return s_str + (" " * max(0, width - current_w))
+
         lines = [f"**{rid}** のレポート (過去 {period_days} 日間)", "```"]
-        lines.append("日付  | ランク          | 前日比 | 戦績")
-        lines.append("------|-----------------|--------|---------------")
         
+        # Prepare rows to calculate max widths
+        header = ["日付", "ランク", "前日比", "戦績"]
+        rows = []
         # Sort history descending (latest first)
         history.sort(key=lambda x: x['fetch_date'], reverse=True)
         
         for i, h in enumerate(history):
             d_str = h['fetch_date'].strftime("%m/%d")
             r_str = rank_calculator.format_rank_display(h['tier'], h['rank'], h['lp'])
-            
             diff_str = "-"
             record_str = "-"
-            
-            # Record calculation
-            # We need the previous entry for diff and win/loss
-            # Since history is sorted by date, next item in the list is the previous day
             if i + 1 < len(history):
                 prev_h = history[i+1]
-                # Diff
                 diff_str = rank_calculator.calculate_diff_text(prev_h, h, include_prefix=False)
-                # Record
                 w = h['wins'] - prev_h['wins']
                 l = h['losses'] - prev_h['losses']
                 g = w + l
                 if g > 0:
                     rate = int((w / g) * 100)
                     record_str = f"{g}戦{w}勝({rate}%)"
-            
-            # Padding for alignment
-            lines.append(f"{d_str:5} | {r_str:15} | {diff_str:6} | {record_str}")
+            rows.append([d_str, r_str, diff_str, record_str])
+
+        # Calculate max widths
+        col_widths = [get_display_width(h) for h in header]
+        for row in rows:
+            for i, cell in enumerate(row):
+                col_widths[i] = max(col_widths[i], get_display_width(cell))
+
+        # Build lines
+        lines.append(" | ".join([pad_string(header[i], col_widths[i]) for i in range(len(header))]))
+        lines.append("-|-".join(["-" * w for w in col_widths]))
+        
+        for row in rows:
+            lines.append(" | ".join([pad_string(row[i], col_widths[i]) for i in range(len(row))]))
         
         lines.append("```")
         return "\n".join(lines)
@@ -715,6 +736,15 @@ class Scheduler(commands.Cog):
         
         headers = ["RIOT ID"] + [d.strftime("%m/%d") for d in shown_dates] + ["前日比", f"{period_days}日比", "戦績"]
         
+        # Calculate colWidths dynamically
+        # Riot ID (0) needs ~15%, Dates (1...N) need ~8%, Diff (N+1, N+2) need ~25%, Record need ~10%
+        num_middle_dates = len(shown_dates)
+        col_widths = [0.15] + [0.08] * num_middle_dates + [0.25, 0.25, 0.1]
+        # Total check: 0.15 + (0.08 * 3) + 0.25 + 0.25 + 0.1 = 0.99 (if 3 dates)
+        # If 5 dates: 0.15 + 0.40 + 0.50 + 0.1 = 1.15. Matplotlib handles scaling but better to stay near 1.0
+        total_relative = sum(col_widths)
+        col_widths = [w / total_relative for w in col_widths]
+
         table_data = []
         for rid, h_map in data_map.items():
             row = [rid.split('#')[0]] # Show only name to save space
@@ -755,7 +785,7 @@ class Scheduler(commands.Cog):
             table_data.append(row)
 
         from src.utils.graph_generator import generate_report_image
-        return generate_report_image(headers, table_data, f"Rank Report (Last {period_days} Days)")
+        return generate_report_image(headers, table_data, f"Rank Report (Last {period_days} Days)", col_widths=col_widths)
 
 async def setup(bot):
     await bot.add_cog(Scheduler(bot))
