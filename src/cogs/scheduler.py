@@ -11,6 +11,7 @@ from datetime import datetime, date, timedelta
 import asyncio
 import io
 import logging
+from tabulate import tabulate
 
 logger = logging.getLogger(__name__)
 
@@ -539,14 +540,14 @@ class Scheduler(commands.Cog):
         # Helper for W/L record
         def format_record(start, end):
             if not start or not end:
-                return "ランク戦情報なし"
+                return "-"
             w = end['wins'] - start['wins']
             l = end['losses'] - start['losses']
             g = w + l
             if g <= 0:
-                return "ランク戦情報なし"
-            rate = (w / g * 100) if g > 0 else 0
-            return f"{g}戦{w}勝 勝率{int(rate)}％"
+                return "-"
+            rate = int((w / g * 100)) if g > 0 else 0
+            return f"{g}戦{w}勝({rate}%)"
 
         # Headers
         headers = ["RIOT ID"] + [format_date_header(d) for d in sorted_dates] + ["前日比", f"{period_days}日比", "戦績（前日）", f"戦績（{period_days}日分）"]
@@ -606,79 +607,36 @@ class Scheduler(commands.Cog):
             
             vals.append(row)
 
-        import unicodedata
-        def get_display_width(s):
-            """Calculate display width considering full-width and ambiguous characters."""
-            width = 0
-            for char in str(s):
-                eaw = unicodedata.east_asian_width(char)
-                # 'W' (Wide), 'F' (Fullwidth), and 'A' (Ambiguous) are usually 2 cells in Japanese environments
-                if eaw in ('W', 'F', 'A'):
-                    width += 2
-                else:
-                    width += 1
-            return width
-
-        def pad_string(s, width):
-            """Pad string with spaces to reach visual width."""
-            s_str = str(s)
-            current_w = get_display_width(s_str)
-            padding = width - current_w
-            return s_str + (" " * max(0, padding))
-
         # Calculate max visual width for each column
-        col_widths = [get_display_width(h) for h in headers]
+        col_widths = [rank_calculator.get_display_width(h) for h in headers]
         for row in vals:
             for i, cell in enumerate(row):
-                col_widths[i] = max(col_widths[i], get_display_width(cell))
+                col_widths[i] = max(col_widths[i], rank_calculator.get_display_width(cell))
         
         # Formatting rows
         # Header
-        header_line = "| " + " | ".join([pad_string(h, col_widths[i]) for i, h in enumerate(headers)]) + " |"
+        header_line = "| " + " | ".join([rank_calculator.pad_string(h, col_widths[i]) for i, h in enumerate(headers)]) + " |"
         
         # Separator Line
         sep_line = "|-" + "-|-".join(["-" * w for w in col_widths]) + "-|"
         
         lines = [header_line, sep_line]
         for row in vals:
-            lines.append("| " + " | ".join([pad_string(c, col_widths[i]) for i, c in enumerate(row)]) + " |")
+            lines.append("| " + " | ".join([rank_calculator.pad_string(c, col_widths[i]) for i, c in enumerate(row)]) + " |")
             
-        return "\n".join(lines)
-
     async def generate_single_user_report(self, user, today: date, period_days: int) -> str:
         """Generate vertical text report for a single user."""
         start_date = today - timedelta(days=period_days)
         uid = user['discord_id']
         rid = user['riot_id']
         history = await db.get_rank_history(uid, rid, start_date, today)
-        
+
         if not history:
             return f"**{rid}** の過去 {period_days} 日間のデータが見つかりませんでした。"
 
-        # Use helper for display width
-        import unicodedata
-        def get_display_width(s):
-            """Calculate display width considering full-width and ambiguous characters."""
-            width = 0
-            for char in str(s):
-                eaw = unicodedata.east_asian_width(char)
-                if eaw in ('W', 'F', 'A'):
-                    width += 2
-                else:
-                    width += 1
-            return width
-
-        def pad_string(s, width):
-            s_str = str(s)
-            current_w = get_display_width(s_str)
-            return s_str + (" " * max(0, width - current_w))
-
-        lines = [f"**{rid}** のレポート (過去 {period_days} 日間)", "```"]
-        
-        # Prepare rows to calculate max widths
+        # Prepare rows
         header = ["日付", "ランク", "前日比", "戦績"]
-        rows = []
-        # Sort history descending (latest first)
+        table_rows = []
         history.sort(key=lambda x: x['fetch_date'], reverse=True)
         
         for i, h in enumerate(history):
@@ -695,23 +653,13 @@ class Scheduler(commands.Cog):
                 if g > 0:
                     rate = int((w / g) * 100)
                     record_str = f"{g}戦{w}勝({rate}%)"
-            rows.append([d_str, r_str, diff_str, record_str])
+            table_rows.append([d_str, r_str, diff_str, record_str])
 
-        # Calculate max widths
-        col_widths = [get_display_width(h) for h in header]
-        for row in rows:
-            for i, cell in enumerate(row):
-                col_widths[i] = max(col_widths[i], get_display_width(cell))
-
-        # Build lines
-        lines.append(" | ".join([pad_string(header[i], col_widths[i]) for i in range(len(header))]))
-        lines.append("-|-".join(["-" * w for w in col_widths]))
+        # Use tabulate with a format that works well in Discord
+        # We'll use a manual grid for best CJK support if needed, or just standard pipe
+        table_text = tabulate(table_rows, headers=header, tablefmt="presto")
         
-        for row in rows:
-            lines.append(" | ".join([pad_string(row[i], col_widths[i]) for i in range(len(row))]))
-        
-        lines.append("```")
-        return "\n".join(lines)
+        return f"**{rid}** のレポート (過去 {period_days} 日間)\n```\n{table_text}\n```"
 
     async def generate_report_image_payload(self, users, today: date, period_days: int) -> io.BytesIO:
         """Generate table image for all users."""
@@ -779,7 +727,8 @@ class Scheduler(commands.Cog):
                 l = anchor_entry['losses'] - start_entry['losses']
                 g = w + l
                 if g > 0:
-                    record = f"{g}戦{w}勝"
+                    rate = int((w / g) * 100)
+                    record = f"{g}戦{w}勝({rate}%)"
             row.append(record)
             
             table_data.append(row)

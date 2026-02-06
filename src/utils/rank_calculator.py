@@ -1,3 +1,4 @@
+import unicodedata
 
 TIER_ORDER = {
     "IRON": 0,
@@ -127,3 +128,22 @@ def format_rank_display(tier: str, rank: str, lp: int) -> str:
     if tier.upper() in ["MASTER", "GRANDMASTER", "CHALLENGER"]:
         return f"{short_tier} {lp}LP"
     return f"{short_tier}{rank} {lp}LP"
+
+def get_display_width(s):
+    """Calculate display width considering full-width and ambiguous characters."""
+    width = 0
+    for char in str(s):
+        eaw = unicodedata.east_asian_width(char)
+        # 'W' (Wide), 'F' (Fullwidth) are 2 cells.
+        # 'A' (Ambiguous) characters like ±, ⇒ are treated as 1 cell for safer Discord monospaced font support.
+        if eaw in ('W', 'F'):
+            width += 2
+        else:
+            width += 1
+    return width
+
+def pad_string(s, width):
+    """Pad string with spaces to reach visual width."""
+    s_str = str(s)
+    current_w = get_display_width(s_str)
+    return s_str + (" " * max(0, width - current_w))
