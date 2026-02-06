@@ -67,9 +67,14 @@ class Scheduler(commands.Cog):
         await interaction.response.defer()
         
         # Validate period
-        if period not in ["daily", "weekly", "monthly"]:
-            await interaction.followup.send("不正な期間です。`daily`, `weekly`, `monthly` のいずれかを指定してください。", ephemeral=True)
-            return
+        # Calculate start date
+        today_date = date.today()
+        if period == "daily":
+            start_date = today_date - timedelta(days=7)
+        elif period == "weekly":
+            start_date = today_date - timedelta(days=60)
+        else: # monthly
+            start_date = today_date - timedelta(days=180)
 
         # "all" support
         if riot_id.lower() == "all":
@@ -105,8 +110,6 @@ class Scheduler(commands.Cog):
             return
 
         discord_id = user['discord_id']
-        
-        # Calculate start date (reuse logic above if needed, but start_date is already calculated)
         
         # Force fetch if requested
         if force_fetch:
