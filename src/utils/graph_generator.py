@@ -151,17 +151,18 @@ def generate_rank_graph(user_data: Dict[str, List[Dict[str, Any]]], period_type:
     # Y-axis range and labels
     if all_values:
         min_v, max_v = min(all_values), max(all_values)
-        y_min = (min_v // 100) * 100
-        y_max = ((max_v // 100) + 1) * 100
+        # Add +/- 1 division (100) padding for better visibility
+        y_min = (min_v // 100 - 1) * 100
+        y_max = (max_v // 100 + 1) * 100
+        
+        # Ensure y_min is not too low (at least IRON IV)
+        y_min = max(0, y_min)
+        
         ax.set_ylim(y_min, y_max)
         
         y_ticks = list(range(int(y_min), int(y_max) + 1, 100))
-        y_labels = []
-        for i, t in enumerate(y_ticks):
-            if i == len(y_ticks) - 1 and len(y_ticks) > 1:
-                y_labels.append(numeric_to_rank(y_ticks[i-1]))
-            else:
-                y_labels.append(numeric_to_rank(t))
+        y_labels = [numeric_to_rank(t) for t in y_ticks]
+        
         ax.set_yticks(y_ticks)
         ax.set_yticklabels(y_labels)
 
