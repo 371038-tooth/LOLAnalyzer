@@ -44,6 +44,7 @@ class Scheduler(commands.Cog):
             sched_time = s['schedule_time']
             channel_id = s['channel_id']
             period_days = s['period_days']
+            server_id = s['server_id'] or 0 # Default to 0 for migrated legacy schedules
             
             if s['status'] != 'ENABLED':
                 continue
@@ -54,7 +55,7 @@ class Scheduler(commands.Cog):
                 hour=sched_time.hour,
                 minute=sched_time.minute,
                 second=sched_time.second,
-                args=[channel_id, period_days, s['output_type']]
+                args=[server_id, channel_id, period_days, s['output_type']]
             )
         print(f"Loaded {len(schedules)} reporting schedules and set Fetch Job at 01:00.")
 
@@ -79,14 +80,14 @@ class Scheduler(commands.Cog):
 
         # "all" support
         if riot_id.lower() == "all":
-            users = await db.get_all_users()
+            users = await db.get_users_by_server(interaction.guild.id)
             if not users:
-                await interaction.followup.send("登録されているユーザーがいません。")
+                await interaction.followup.send("このサーバーに登録されているユーザーがいません。")
                 return
             
             user_data = {}
             for u in users:
-                rows = await db.get_rank_history_for_graph(u['discord_id'], u['riot_id'], start_date)
+                rows = await db.get_rank_history_for_graph(interaction.guild.id, u['discord_id'], u['riot_id'], start_date)
                 if rows:
                     user_data[u['riot_id']] = [dict(r) for r in rows]
             
@@ -105,9 +106,9 @@ class Scheduler(commands.Cog):
 
         # Single user logic
         # Find user in DB
-        user = await db.get_user_by_riot_id(riot_id)
+        user = await db.get_user_by_riot_id(interaction.guild.id, riot_id)
         if not user:
-            await interaction.followup.send(f"ユーザー {riot_id} は登録されていません。", ephemeral=True)
+            await interaction.followup.send(f"ユーザー {riot_id} はこのサーバーに登録されていません。", ephemeral=True)
             return
 
         discord_id = user['discord_id']
@@ -124,7 +125,7 @@ class Scheduler(commands.Cog):
                         # Map OPGG history to rank_history
                         h_date = entry['updated_at'].date()
                         await db.add_rank_history(
-                            discord_id, riot_id, 
+                            interaction.guild.id, discord_id, riot_id, 
                             entry['tier'], entry['rank'], entry['lp'],
                             0, 0, h_date
                         )
@@ -132,7 +133,7 @@ class Scheduler(commands.Cog):
                 print(f"Error during force fetch: {e}")
 
         # Fetch data from DB
-        rows = await db.get_rank_history_for_graph(discord_id, riot_id, start_date)
+        rows = await db.get_rank_history_for_graph(interaction.guild.id, discord_id, riot_id, start_date)
         
         if not rows:
             await interaction.followup.send("表示するデータがありません。(`/test fetch` でデータを取得してください)")
@@ -153,9 +154,9 @@ class Scheduler(commands.Cog):
 
     @schedule_group.command(name="show", description="現在登録されているスケジュールの一覧を表示します")
     async def schedule_show(self, interaction: discord.Interaction):
-        schedules = await db.get_all_schedules()
+        schedules = await db.get_schedules_by_server(interaction.guild.id)
         if not schedules:
-            await interaction.response.send_message("登録されているスケジュールはありません。")
+            await interaction.response.send_message("このサーバーに登録されているスケジュールはありません。")
             return
 
         msg = "**登録スケジュール一覧**\n"
@@ -187,9 +188,9 @@ class Scheduler(commands.Cog):
             return
 
         try:
-            await db.register_schedule(time_str, channel_id, interaction.user.id, period_days, output_type)
+            await db.register_schedule(interaction.guild.id, time_str, channel_id, interaction.user.id, period_days, output_type)
             await self.reload_schedules()
-            await interaction.followup.send(f"スケジュール登録完了: {time_str} にチャンネル {channel_id} へ通知 ({period_days}日分, 形式: {output_type})")
+            await interaction.followup.send(f"スケジュール登録完了: {time_str} にチャンネル {channel_id} へ通知 ({period_days}日分, 形式: {output_type}) (サーバー: {interaction.guild.name})")
         except Exception as e:
             await interaction.followup.send(f"エラーが発生しました: {e}")
 
@@ -285,14 +286,14 @@ class Scheduler(commands.Cog):
         await interaction.response.defer()
         try:
             if riot_id.lower() == "all":
-                results = await self.fetch_all_users_rank()
-                await interaction.followup.send(f"✅ 全ユーザーのランク情報を取得しました: 成功 {results['success']}, 失敗 {results['failed']} (合計 {results['total']})")
+                results = await self.fetch_all_users_rank(server_id=interaction.guild.id)
+                await interaction.followup.send(f"✅ このサーバーの全ユーザーのランク情報を取得しました: 成功 {results['success']}, 失敗 {results['failed']} (合計 {results['total']})")
                 return
 
             # Find user in DB
-            user = await db.get_user_by_riot_id(riot_id)
+            user = await db.get_user_by_riot_id(interaction.guild.id, riot_id)
             if not user:
-                await interaction.followup.send(f"ユーザー `{riot_id}` は登録されていません。`/user add` で登録してください。")
+                await interaction.followup.send(f"ユーザー `{riot_id}` はこのサーバーに登録されていません。`/user add` で登録してください。")
                 return
             
             # Fetch and save current rank
@@ -300,7 +301,7 @@ class Scheduler(commands.Cog):
             if success:
                 # Get the latest rank from DB to display
                 today = date.today()
-                history = await db.get_rank_history(user['discord_id'], riot_id, today, today)
+                history = await db.get_rank_history(user['server_id'], user['discord_id'], riot_id, today, today)
                 if history:
                     h = history[0]
                     rank_display = rank_calculator.format_rank_display(h['tier'], h['rank'], h['lp'])
@@ -323,9 +324,9 @@ class Scheduler(commands.Cog):
         try:
             if riot_id:
                 # Individual report (Image)
-                user = await db.get_user_by_riot_id(riot_id)
+                user = await db.get_user_by_riot_id(interaction.guild.id, riot_id)
                 if not user:
-                    await interaction.followup.send(f"ユーザー `{riot_id}` は登録されていません。")
+                    await interaction.followup.send(f"ユーザー `{riot_id}` はこのサーバーに登録されていません。")
                     return
                 
                 today = date.today()
@@ -337,9 +338,9 @@ class Scheduler(commands.Cog):
                     await interaction.followup.send(f"`{riot_id}` の過去 {days} 日間のデータが見つかりませんでした。")
             else:
                 # All users report (Image)
-                users = await db.get_all_users()
+                users = await db.get_users_by_server(interaction.guild.id)
                 if not users:
-                    await interaction.followup.send("登録されているユーザーがいません。")
+                    await interaction.followup.send("このサーバーに登録されているユーザーがいません。")
                     return
 
                 today = date.today()
@@ -395,11 +396,15 @@ class Scheduler(commands.Cog):
 
         return t_str, channel_id, period_days, o_str, None
 
-    async def fetch_all_users_rank(self, backfill: bool = False):
+    async def fetch_all_users_rank(self, backfill: bool = False, server_id: int = None):
         """Fetch current rank and optionally backfill history."""
-        logger.info(f"Starting global rank collection (backfill={backfill})...")
+        logger.info(f"Starting rank collection (backfill={backfill}, server_id={server_id})...")
         today = date.today()
-        users = await db.get_all_users()
+        
+        if server_id:
+            users = await db.get_users_by_server(server_id)
+        else:
+            users = await db.get_all_users()
         
         results = {'total': len(users), 'success': 0, 'failed': 0}
         
@@ -425,7 +430,7 @@ class Scheduler(commands.Cog):
                             # Avoid overwriting today's report
                             if h_date < today:
                                 await db.add_rank_history(
-                                    uid, rid, 
+                                    user['server_id'], uid, rid, 
                                     entry['tier'], entry['rank'], entry['lp'],
                                     0, 0, h_date
                                 )
@@ -438,16 +443,16 @@ class Scheduler(commands.Cog):
         logger.info(f"Global rank collection completed: {results}")
         return results
 
-    async def run_daily_report(self, channel_id: int, period_days: int, output_type: str = 'table'):
-        print(f"Running report for channel {channel_id} (type: {output_type})")
+    async def run_daily_report(self, server_id: int, channel_id: int, period_days: int, output_type: str = 'table'):
+        print(f"Running report for server {server_id}, channel {channel_id} (type: {output_type})")
         channel = self.bot.get_channel(channel_id)
         if not channel:
             print(f"Channel {channel_id} not found.")
             return
 
-        users = await db.get_all_users()
+        users = await db.get_users_by_server(server_id)
         if not users:
-            await channel.send("登録ユーザーがいません。")
+            print(f"No users in server {server_id} for report.")
             return
 
         # 1. Fetch latest data for all users before generating report
@@ -466,7 +471,7 @@ class Scheduler(commands.Cog):
                 start_date = today - timedelta(days=period_days)
                 user_data = {}
                 for u in users:
-                    rows = await db.get_rank_history_for_graph(u['discord_id'], u['riot_id'], start_date)
+                    rows = await db.get_rank_history_for_graph(u['server_id'], u['discord_id'], u['riot_id'], start_date)
                     if rows:
                         user_data[u['riot_id']] = [dict(r) for r in rows]
                 
@@ -520,7 +525,7 @@ class Scheduler(commands.Cog):
             # Get Rank
             tier, rank, lp, wins, losses = await opgg_client.get_rank_info(summoner)
             logger.info(f"Rank info for {riot_id}: {tier} {rank} {lp}LP (W:{wins} L:{losses})")
-            await db.add_rank_history(discord_id, riot_id, tier, rank, lp, wins, losses, target_date)
+            await db.add_rank_history(user['server_id'], discord_id, riot_id, tier, rank, lp, wins, losses, target_date)
             return True
         except Exception as e:
             logger.error(f"Error in fetch_and_save_rank for {riot_id}: {e}", exc_info=True)
@@ -532,7 +537,8 @@ class Scheduler(commands.Cog):
         start_date = today - timedelta(days=period_days)
         uid = user['discord_id']
         rid = user['riot_id']
-        history = await db.get_rank_history(uid, rid, start_date, today)
+        sid = user['server_id']
+        history = await db.get_rank_history(sid, uid, rid, start_date, today)
         
         if not history:
             return None
@@ -570,7 +576,7 @@ class Scheduler(commands.Cog):
         all_dates = set()
         
         for user in users:
-            history = await db.get_rank_history(user['discord_id'], user['riot_id'], start_date, today)
+            history = await db.get_rank_history(user['server_id'], user['discord_id'], user['riot_id'], start_date, today)
             user_history = {h['fetch_date']: h for h in history}
             data_map[user['riot_id']] = user_history
             all_dates.update(user_history.keys())

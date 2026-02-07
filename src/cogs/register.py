@@ -16,14 +16,13 @@ class Register(commands.Cog):
 
     @user_group.command(name="show", description="登録されているユーザーの一覧を表示します")
     async def user_show(self, interaction: discord.Interaction):
-        users = await db.get_all_users()
+        users = await db.get_users_by_server(interaction.guild.id)
         if not users:
-            await interaction.response.send_message("登録されているユーザーはいません。")
+            await interaction.response.send_message("このサーバーに登録されているユーザーはいません。")
             return
 
-        msg = "**登録ユーザー一覧**\n"
+        msg = f"**{interaction.guild.name} の登録ユーザー一覧**\n"
         for u in users:
-            # Resolve discord user for display name if possible
             member = interaction.guild.get_member(u['discord_id'])
             d_name = member.display_name if member else str(u['discord_id'])
             msg += f"Discord: {d_name} | Riot: {u['riot_id']}\n"
@@ -82,15 +81,15 @@ class Register(commands.Cog):
             # Use the user-provided game_name to preserve Japanese characters
             real_riot_id = f"{game_name}#{tag_line.upper()}"
             
-            await db.register_user(target_user.id, real_riot_id, fake_puuid)
-            await interaction.followup.send(f"登録完了: {target_user.display_name} -> {real_riot_id}")
+            await db.register_user(interaction.guild.id, target_user.id, real_riot_id, fake_puuid)
+            await interaction.followup.send(f"登録完了: {target_user.display_name} -> {real_riot_id} (サーバー: {interaction.guild.name})")
         except Exception as e:
             await interaction.followup.send(f"登録エラー: {e}")
 
     @user_group.command(name="del", description="Riot IDを指定してユーザー登録を解除します")
     async def user_del(self, interaction: discord.Interaction, riot_id: str):
         try:
-            await db.delete_user_by_riot_id(riot_id)
+            await db.delete_user_by_riot_id(interaction.guild.id, riot_id)
             await interaction.response.send_message(f"登録解除完了: {riot_id}")
         except Exception as e:
             await interaction.response.send_message(f"削除エラー: {e}", ephemeral=True)
