@@ -19,17 +19,20 @@ class OPGGClient:
             except Exception:
                 self.opgg_instance = None
                 self._headers = {"User-Agent": "Mozilla/5.0"}
+            self._headers = getattr(self.opgg_instance, "_headers", {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            })
+        else:
             self._headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             }
-        
         self._bypass_api_url = "https://lol-api-summoner.op.gg/api"
         if not getattr(self, "_search_api_url", None):
             self._search_api_url = f"{self._bypass_api_url}/v3/{{region}}/summoners?riot_id={{summoner_name}}%23{{tagline}}"
         if not getattr(self, "_summary_api_url", None):
             self._summary_api_url = f"{self._bypass_api_url}/{{region}}/summoners/{{summoner_id}}/summary"
 
-    def _get_params(self, url):
+    def _prepare_opgg_params(self, url):
         return {
             "base_api_url": url,
             "headers": self._headers
@@ -74,7 +77,7 @@ class OPGGClient:
             summoner_name=name,
             tagline=tag
         )
-        params = self._get_params(url_template)
+        params = self._prepare_opgg_params(url_template)
         logger.info(f"Using fallback search for {query} (URL: {url_template})")
         
         try:
@@ -220,6 +223,28 @@ class OPGGClient:
     async def get_win_loss(self, summoner: Summoner):
         _, _, _, w, l = await self.get_rank_info(summoner)
         return w, l
+
+    async def renew_summoner(self, summoner: Summoner):
+        """Request OP.GG to renew/refresh summoner data (Async)."""
+        try:
+            region_str = "jp"
+            # Use the renewal endpoint as identified in the library
+            url = f"https://lol-web-api.op.gg/api/v1.0/internal/bypass/summoners/{region_str}/{summoner.summoner_id}/renewal"
+            
+            logger.info(f"Requesting data renewal for summoner {summoner.summoner_id} (URL: {url})")
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, headers=self._headers) as resp:
+                    logger.info(f"Renewal request status: {resp.status}")
+                    if resp.status in [200, 201, 202]:
+                        data = await resp.json()
+                        logger.info(f"Renewal successful: {data.get('data', {}).get('message', 'Success')}")
+                        return True
+                    else:
+                        logger.warning(f"Renewal request failed with status {resp.status}")
+                        return False
+        except Exception as e:
+            logger.error(f"Error in renew_summoner: {e}")
+            return False
 
     def division_to_roman(self, division):
         if not division:

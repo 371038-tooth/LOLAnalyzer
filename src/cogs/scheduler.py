@@ -498,6 +498,11 @@ class Scheduler(commands.Cog):
                 logger.warning(f"User not found on OPGG: {riot_id}")
                 return False
                 
+            # Trigger renewal to ensure data is fresh
+            await opgg_client.renew_summoner(summoner)
+            # Short sleep to give OP.GG a moment to start/process the update from Riot
+            await asyncio.sleep(2)
+
             # Get Rank
             tier, rank, lp, wins, losses = await opgg_client.get_rank_info(summoner)
             logger.info(f"Rank info for {riot_id}: {tier} {rank} {lp}LP (W:{wins} L:{losses})")
