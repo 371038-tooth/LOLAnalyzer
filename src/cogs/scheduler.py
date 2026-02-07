@@ -443,6 +443,14 @@ class Scheduler(commands.Cog):
             await channel.send("登録ユーザーがいません。")
             return
 
+        # 1. Fetch latest data for all users before generating report
+        for user in users:
+            try:
+                await self.fetch_and_save_rank(user)
+                await asyncio.sleep(1) # Basic rate limiting
+            except Exception as e:
+                logger.error(f"Failed to refresh user {user['riot_id']} in daily report: {e}")
+
         today = date.today()
         
         try:
@@ -466,14 +474,13 @@ class Scheduler(commands.Cog):
                 else:
                     await channel.send("グラフの生成に失敗しました。")
             else:
-                # Table output
-                report = await self.generate_report_table(users, today, period_days)
-                if len(report) > 1990:
-                    chunks = [report[i:i+1900] for i in range(0, len(report), 1900)]
-                    for chunk in chunks:
-                        await channel.send(f"```{chunk}```")
+                # Image-based Table output (Migrated from text table)
+                buf = await self.generate_report_image_payload(users, today, period_days)
+                if buf:
+                    file = discord.File(fp=buf, filename="scheduled_report.png")
+                    await channel.send(content=f"**定期レポート (過去{period_days}日間)**", file=file)
                 else:
-                    await channel.send(f"```{report}```")
+                    await channel.send("レポートの生成に失敗しました。")
 
         except Exception as e:
             await channel.send(f"レポート生成中にエラーが発生しました: {e}")
@@ -513,126 +520,6 @@ class Scheduler(commands.Cog):
             return False
 
 
-    async def generate_report_table(self, users, today: date, period_days: int) -> str:
-        # Determine date range
-        start_date = today - timedelta(days=period_days)
-        
-        # Fetch history for all users
-        data_map = {} # {(discord_id, riot_id): {date: {tier, rank, lp, wins, losses}}}
-        all_dates = set()
-        
-        for user in users:
-            uid = user['discord_id']
-            rid = user['riot_id']
-            history = await db.get_rank_history(uid, rid, start_date, today)
-            user_history = {}
-            for h in history:
-                d = h['fetch_date'] # datetime.date
-                user_history[d] = {
-                    'tier': h['tier'], 
-                    'rank': h['rank'], 
-                    'lp': h['lp'],
-                    'wins': h['wins'],
-                    'losses': h['losses']
-                }
-                all_dates.add(d)
-            data_map[(uid, rid)] = user_history
-            
-        sorted_dates = sorted(list(all_dates))
-        if not sorted_dates:
-            return "表示対象期間にデータがありません。"
-
-        # Formatter helper
-        def format_date_header(d):
-            return d.strftime("%m/%d")
-
-        # Helper for W/L record
-        def format_record(start, end):
-            if not start or not end:
-                return "-"
-            w = end['wins'] - start['wins']
-            l = end['losses'] - start['losses']
-            g = w + l
-            if g <= 0:
-                return "-"
-            rate = int((w / g * 100)) if g > 0 else 0
-            return f"{g}戦{w}勝({rate}%)"
-
-        # Headers
-        headers = ["RIOT ID"] + [format_date_header(d) for d in sorted_dates] + ["前日比", f"{period_days}日比", "戦績（前日）", f"戦績（{period_days}日分）"]
-        
-        # Determine anchor date for Diff (Latest available in sorted_dates)
-        anchor_date = sorted_dates[-1] if sorted_dates else today
-
-        vals = [] # List of rows
-        
-        for user in users:
-            uid = user['discord_id']
-            rid = user['riot_id']
-            h_map = data_map.get((uid, rid), {})
-            
-            # User Name - show full Riot ID including tag
-            name = rid
-            
-            row = [name]
-            
-            for d in sorted_dates:
-                entry = h_map.get(d)
-                if entry:
-                    cell = rank_calculator.format_rank_display(entry['tier'], entry['rank'], entry['lp'])
-                else:
-                    cell = "-"
-                row.append(cell)
-            
-            # 1. 前日比 (Daily Diff)
-            anchor_entry = h_map.get(anchor_date)
-            prev_to_anchor = anchor_date - timedelta(days=1)
-            prev_entry = h_map.get(prev_to_anchor)
-            
-            daily_diff_str = "-"
-            if prev_entry and anchor_entry:
-                daily_diff_str = rank_calculator.calculate_diff_text(prev_entry, anchor_entry, include_prefix=False)
-            elif anchor_entry:
-                daily_diff_str = "履歴なし"
-            row.append(daily_diff_str)
-
-            # 2. 〇日比 (Period Diff)
-            start_entry = h_map.get(sorted_dates[0]) if sorted_dates else None
-            period_diff_str = "-"
-            if start_entry and anchor_entry:
-                if start_entry == anchor_entry:
-                    period_diff_str = "期間中変化なし"
-                else:
-                    period_diff_str = rank_calculator.calculate_diff_text(start_entry, anchor_entry, include_prefix=False)
-            elif anchor_entry:
-                period_diff_str = "履歴なし"
-            row.append(period_diff_str)
-
-            # 戦績（前日）
-            row.append(format_record(prev_entry, anchor_entry))
-            
-            # 戦績（〇日分）
-            row.append(format_record(start_entry, anchor_entry))
-            
-            vals.append(row)
-
-        # Calculate max visual width for each column
-        col_widths = [rank_calculator.get_display_width(h) for h in headers]
-        for row in vals:
-            for i, cell in enumerate(row):
-                col_widths[i] = max(col_widths[i], rank_calculator.get_display_width(cell))
-        
-        # Formatting rows
-        # Header
-        header_line = "| " + " | ".join([rank_calculator.pad_string(h, col_widths[i]) for i, h in enumerate(headers)]) + " |"
-        
-        # Separator Line
-        sep_line = "|-" + "-|-".join(["-" * w for w in col_widths]) + "-|"
-        
-        lines = [header_line, sep_line]
-        for row in vals:
-            lines.append("| " + " | ".join([rank_calculator.pad_string(c, col_widths[i]) for i, c in enumerate(row)]) + " |")
-            
     async def generate_single_user_report(self, user, today: date, period_days: int) -> io.BytesIO:
         """Generate vertical image report for a single user."""
         start_date = today - timedelta(days=period_days)
