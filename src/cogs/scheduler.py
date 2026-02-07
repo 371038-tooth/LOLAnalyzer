@@ -322,15 +322,19 @@ class Scheduler(commands.Cog):
         await interaction.response.defer()
         try:
             if riot_id:
-                # Individual report (Text)
+                # Individual report (Image)
                 user = await db.get_user_by_riot_id(riot_id)
                 if not user:
                     await interaction.followup.send(f"ユーザー `{riot_id}` は登録されていません。")
                     return
                 
                 today = date.today()
-                report_text = await self.generate_single_user_report(user, today, days)
-                await interaction.followup.send(report_text)
+                buf = await self.generate_single_user_report(user, today, days)
+                if buf:
+                    file = discord.File(buf, filename=f"report_{riot_id.replace('#', '_')}.png")
+                    await interaction.followup.send(file=file)
+                else:
+                    await interaction.followup.send(f"`{riot_id}` の過去 {days} 日間のデータが見つかりませんでした。")
             else:
                 # All users report (Image)
                 users = await db.get_all_users()
@@ -624,15 +628,15 @@ class Scheduler(commands.Cog):
         for row in vals:
             lines.append("| " + " | ".join([rank_calculator.pad_string(c, col_widths[i]) for i, c in enumerate(row)]) + " |")
             
-    async def generate_single_user_report(self, user, today: date, period_days: int) -> str:
-        """Generate vertical text report for a single user."""
+    async def generate_single_user_report(self, user, today: date, period_days: int) -> io.BytesIO:
+        """Generate vertical image report for a single user."""
         start_date = today - timedelta(days=period_days)
         uid = user['discord_id']
         rid = user['riot_id']
         history = await db.get_rank_history(uid, rid, start_date, today)
-
+        
         if not history:
-            return f"**{rid}** の過去 {period_days} 日間のデータが見つかりませんでした。"
+            return None
 
         # Prepare rows
         header = ["日付", "ランク", "前日比", "戦績"]
@@ -655,11 +659,10 @@ class Scheduler(commands.Cog):
                     record_str = f"{g}戦{w}勝({rate}%)"
             table_rows.append([d_str, r_str, diff_str, record_str])
 
-        # Use tabulate with a format that works well in Discord
-        # We'll use a manual grid for best CJK support if needed, or just standard pipe
-        table_text = tabulate(table_rows, headers=header, tablefmt="presto")
-        
-        return f"**{rid}** のレポート (過去 {period_days} 日間)\n```\n{table_text}\n```"
+        import src.utils.graph_generator as graph_generator
+        # Custom col_widths for individual report (vertical)
+        col_widths = [0.12, 0.20, 0.40, 0.28]
+        return graph_generator.generate_report_image(header, table_rows, f"{rid} Report (Last {period_days} Days)", col_widths=col_widths)
 
     async def generate_report_image_payload(self, users, today: date, period_days: int) -> io.BytesIO:
         """Generate table image for all users."""
