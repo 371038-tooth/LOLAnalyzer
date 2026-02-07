@@ -164,7 +164,7 @@ class Scheduler(commands.Cog):
             t = s['schedule_time']
             t_str = t.strftime("%H:%M") if hasattr(t, 'strftime') else str(t)
             status_emoji = "✅" if s['status'] == 'ENABLED' else "❌"
-            msg += f"{status_emoji} ID: {s['id']} | 時間: {t_str} | Ch: {s['channel_id']} | 期間: {s['period_days']}日 | 形式: {s['output_type']}\n"
+            msg += f"{status_emoji} ID: {s['id']} | 時間: {t_str} | Ch: <#{s['channel_id']}> | 期間: {s['period_days']}日 | 形式: {s['output_type']}\n"
         
         await interaction.response.send_message(msg)
 
@@ -235,7 +235,7 @@ class Scheduler(commands.Cog):
             return
 
         current_time = s['schedule_time'].strftime("%H:%M") if hasattr(s['schedule_time'], 'strftime') else str(s['schedule_time'])
-        await interaction.response.send_message(f"変更内容を入力してください (ID: {schedule_id})\n現在の設定: `{current_time} {s['channel_id']} {s['period_days']} {s['output_type']}`\n形式: `時間 チャンネル 期間 形式` (例: `22:00 here 7 graph`)")
+        await interaction.response.send_message(f"変更内容を入力してください (ID: {schedule_id})\n現在の設定: `{current_time}` <#{s['channel_id']}> `{s['period_days']} {s['output_type']}`\n形式: `時間 チャンネル 期間 形式` (例: `22:00 here 7 graph`)")
 
         def check(m):
             return m.author.id == interaction.user.id and m.channel.id == interaction.channel.id
@@ -374,8 +374,15 @@ class Scheduler(commands.Cog):
             channel_id = current_channel_id
         elif c_str.isdigit():
             channel_id = int(c_str)
+        elif c_str.startswith('<#') and c_str.endswith('>'):
+            # Discord channel mention format: <#ID>
+            cid_str = c_str[2:-1]
+            if cid_str.isdigit():
+                channel_id = int(cid_str)
+            else:
+                 return None, None, None, None, "チャンネルメンションの形式が正しくありません"
         else:
-             return None, None, None, None, "チャンネル指定が正しくありません ('here' または ID)"
+             return None, None, None, None, "チャンネル指定が正しくありません ('here'、ID、またはチャンネル指定)"
 
         # Validate Period
         if not p_str.isdigit():
