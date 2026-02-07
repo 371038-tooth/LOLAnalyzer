@@ -1,6 +1,9 @@
+import logging
 import os
 import asyncpg
 from datetime import datetime, date, time
+
+logger = logging.getLogger(__name__)
 
 class Database:
     def __init__(self):
@@ -58,7 +61,7 @@ class Database:
                         pk_columns = [r['attname'] for r in pk_check]
                         
                         if 'server_id' not in pk_columns:
-                            print("Migrating 'users' Primary Key to include server_id...")
+                            logger.info("Migrating 'users' Primary Key to include server_id...")
                             await conn.execute("ALTER TABLE users DROP CONSTRAINT IF EXISTS users_pkey CASCADE")
                             # Set a default value for existing rows (0 or NULL, but PK can't be NULL)
                             # We'll use 0 as a placeholder for migration
@@ -97,13 +100,13 @@ class Database:
                         await conn.execute("ALTER TABLE schedules ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'ENABLED'")
                         await conn.execute("ALTER TABLE schedules ADD COLUMN IF NOT EXISTS output_type VARCHAR(50) DEFAULT 'table'")
                         
-                        print("Schema migration checked/applied (server_id & Composite Keys).")
+                        logger.info("Schema migration checked/applied (server_id & Composite Keys).")
                     except Exception as e:
-                        print(f"Migration warning: {e}")
+                        logger.warning(f"Migration warning: {e}")
 
-            print("Database schema initialized.")
+            logger.info("Database schema initialized.")
         else:
-            print(f"Warning: schema.sql not found at {schema_path}")
+            logger.warning(f"Warning: schema.sql not found at {schema_path}")
 
     async def close(self):
         if self.pool:

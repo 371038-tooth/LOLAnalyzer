@@ -311,7 +311,7 @@ class Scheduler(commands.Cog):
             else:
                 await interaction.followup.send(f"❌ `{riot_id}` のランク情報取得に失敗しました。OPGGで見つからないか、エラーが発生しました。")
         except Exception as e:
-            logger.error(f"Error in fetch command: {e}", exc_info=True)
+            logger.error(f"Error in fetch command (Server: {interaction.guild.name}): {e}", exc_info=True)
             await interaction.followup.send(f"実行中にエラーが発生しました: {e}")
 
     @app_commands.command(name="report", description="指定した日数の集計結果を表示します")
@@ -352,7 +352,7 @@ class Scheduler(commands.Cog):
                 else:
                     await interaction.followup.send("レポートの生成に失敗しました。")
         except Exception as e:
-            logger.error(f"Error in report command: {e}", exc_info=True)
+            logger.error(f"Error in report command (Server: {interaction.guild.name}): {e}", exc_info=True)
             await interaction.followup.send(f"集計出力中にエラーが発生しました: {e}")
 
     def parse_schedule_input(self, text: str, current_channel_id: int):
@@ -444,15 +444,17 @@ class Scheduler(commands.Cog):
         return results
 
     async def run_daily_report(self, server_id: int, channel_id: int, period_days: int, output_type: str = 'table'):
-        print(f"Running report for server {server_id}, channel {channel_id} (type: {output_type})")
+        guild = self.bot.get_guild(server_id)
+        guild_name = guild.name if guild else "Unknown"
+        logger.info(f"Running report for server '{guild_name}' (ID: {server_id}), channel {channel_id} (type: {output_type})")
         channel = self.bot.get_channel(channel_id)
         if not channel:
-            print(f"Channel {channel_id} not found.")
+            logger.warning(f"Channel {channel_id} not found.")
             return
 
         users = await db.get_users_by_server(server_id)
         if not users:
-            print(f"No users in server {server_id} for report.")
+            logger.info(f"No users in server {server_id} for report.")
             return
 
         # 1. Fetch latest data for all users before generating report
@@ -511,7 +513,7 @@ class Scheduler(commands.Cog):
         
         # Get Summoner
         try:
-            logger.info(f"Fetching rank for {riot_id} on {target_date}")
+            logger.info(f"Fetching rank for {riot_id} on {target_date} (Server: {user.get('server_id', 'Unknown')})")
             summoner = await opgg_client.get_summoner(name, tag, Region.JP)
             if not summoner:
                 logger.warning(f"User not found on OPGG: {riot_id}")

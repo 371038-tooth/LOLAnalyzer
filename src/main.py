@@ -12,11 +12,25 @@ import discord
 from discord.ext import commands
 from src.database import db
 
+from logging.handlers import RotatingFileHandler
+
 # Configure logging
+log_dir = os.path.join(root_path, 'logs')
+os.makedirs(log_dir, exist_ok=True)
+
 logging.basicConfig(
     level=logging.INFO,
     format='[%(asctime)s] [%(levelname)-8s] %(name)s: %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
+    datefmt='%Y-%m-%d %H:%M:%S',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        RotatingFileHandler(
+            os.path.join(log_dir, 'bot.log'),
+            maxBytes=5*1024*1024,
+            backupCount=5,
+            encoding='utf-8'
+        )
+    ]
 )
 logger = logging.getLogger(__name__)
 
@@ -34,7 +48,7 @@ class LOLBot(commands.Bot):
     async def setup_hook(self):
         # Connect to Database
         await db.connect()
-        print("Connected to Database")
+        logger.info("Connected to Database")
         
         # Load extensions
         await self.load_extension('src.cogs.register')
@@ -43,14 +57,15 @@ class LOLBot(commands.Bot):
         
         # Sync slash commands
         await self.tree.sync()
-        print("Global slash commands synced")
+        logger.info("Global slash commands synced")
 
     async def on_message(self, message):
         if message.author.bot:
             return
         
         # Logging to see if messages are reaching the bot
-        print(f"DEBUG: Message from {message.author} in {message.channel}: {message.content}")
+        guild_info = f"Guild: {message.guild.name} ({message.guild.id})" if message.guild else "DM"
+        logger.debug(f"Message from {message.author} in {guild_info} #{message.channel}: {message.content}")
         
         await self.process_commands(message)
 
@@ -59,14 +74,14 @@ class LOLBot(commands.Bot):
         await super().close()
 
     async def on_ready(self):
-        print(f'Logged in as {self.user} (ID: {self.user.id})')
+        logger.info(f'Logged in as {self.user} (ID: {self.user.id})')
 
 def main():
     # Attempt to get token from environment variables
     raw_token = os.getenv('DISCORD_BOT_TOKEN') or os.getenv('DISCORD_TOKEN')
     
     if not raw_token:
-        print("Error: No Discord token found in environment variables.")
+        logger.error("Error: No Discord token found in environment variables.")
         return
 
     # Clean the token for robustness

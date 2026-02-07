@@ -6,7 +6,9 @@ import asyncio
 from src.utils.opgg_client import opgg_client
 from src.utils.opgg_compat import Region
 import urllib.parse
+import logging
 
+logger = logging.getLogger(__name__)
 
 class Register(commands.Cog):
     def __init__(self, bot):
@@ -83,7 +85,9 @@ class Register(commands.Cog):
             
             await db.register_user(interaction.guild.id, target_user.id, real_riot_id, fake_puuid)
             await interaction.followup.send(f"登録完了: {target_user.display_name} -> {real_riot_id} (サーバー: {interaction.guild.name})")
+            logger.info(f"Registered user: {target_user.display_name} -> {real_riot_id} (Server: {interaction.guild.name})")
         except Exception as e:
+            logger.error(f"Error registering user: {e}", exc_info=True)
             await interaction.followup.send(f"登録エラー: {e}")
 
     @user_group.command(name="del", description="Riot IDを指定してユーザー登録を解除します")
@@ -91,7 +95,9 @@ class Register(commands.Cog):
         try:
             await db.delete_user_by_riot_id(interaction.guild.id, riot_id)
             await interaction.response.send_message(f"登録解除完了: {riot_id}")
+            logger.info(f"Deleted user: {riot_id} (Server: {interaction.guild.name})")
         except Exception as e:
+            logger.error(f"Error deleting user: {e}", exc_info=True)
             await interaction.response.send_message(f"削除エラー: {e}", ephemeral=True)
 
     @user_group.command(name="edit", description="Riot IDを指定してユーザー情報を更新します（再登録と同じです）")
